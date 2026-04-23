@@ -27,6 +27,88 @@ This plugin parses the error, figures out which channel (A, E, or R) actually di
 ╰─
 ```
 
+## Preview
+
+More scenarios the plugin recognizes, shown as they render in the float.
+
+### Unhandled errors (forgot `Effect.catchAll` / `catchTags` / `orDie`)
+
+```
+╭─ ⚠ Effect — Unhandled Errors
+│
+│  ⚠ Not in E channel: NetworkError | ParseError
+│  ⚡ Hint: .pipe(Effect.catchTags({...})) or Effect.orDie
+│
+│  Got:      Effect<User, NetworkError | ParseError, Http>
+│  Expected: Effect<User, never, Http>
+╰─
+```
+
+### Wrong success type (A)
+
+```
+╭─ ⊘ Effect — A Mismatch
+│
+│  ✗ Got A:    User
+│  ✓ Expected: string
+│
+│  Got:      Effect<User, NetworkError | ParseError, Http>
+│  Expected: Effect<string, NetworkError | ParseError, Http>
+╰─
+```
+
+### Scope required
+
+`Scope` is detected specifically so the hint suggests `Effect.scoped` instead of a generic `Effect.provide`.
+
+```
+╭─ ◈ Effect — Scope Required
+│
+│  ◈ Forgot to provide: Scope
+│  ⚡ Hint: wrap in Effect.scoped(...) — Scope is required
+│
+│  Got:      Effect<string, never, Scope>
+│  Expected: Effect<string, never, never>
+╰─
+```
+
+### Multi-channel diff
+
+When two or more channels diverge at once, the compact boxes step aside for a full tri-channel view with all annotations stacked at the bottom.
+
+```
+╭─ ⊘ Effect Mismatch
+│
+│  ✗ Got:
+│     A: void
+│     E: NetworkError | ParseError | DbError
+│     R: Http | Database | Logger
+│
+│  ✓ Expected:
+│     A: void
+│     E: never
+│     R: never
+│
+│  ◈ Forgot to provide: Http | Database | Logger
+│  ⚠ Unhandled errors: NetworkError | ParseError | DbError
+╰─
+```
+
+### Layer — ROut widening
+
+Layer mismatches get their own channel labels (`ROut / E / RIn`) and a `Layer.provide` / `Layer.merge` hint.
+
+```
+╭─ ⊘ Layer — ROut Mismatch
+│
+│  ✗ Got ROut:    Database | Http
+│  ✓ Expected: Database
+│
+│  Got:      Layer<Database | Http, never, never>
+│  Expected: Layer<Database, never, never>
+╰─
+```
+
 ## Features
 
 **Effect-specific**
