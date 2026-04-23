@@ -16,6 +16,8 @@ VSCode and Zed render that as one wrapped line in a tooltip. The actual informat
 
 This plugin parses the error, figures out which channel (A, E, or R) actually diverged, and renders:
 
+![Missing services box](assets/missing-services.png)
+
 ```
 ╭─ ◈ Effect — Missing Services
 │
@@ -32,6 +34,8 @@ This plugin parses the error, figures out which channel (A, E, or R) actually di
 More scenarios the plugin recognizes, shown as they render in the float.
 
 ### Unhandled errors (forgot `Effect.catchAll` / `catchTags` / `orDie`)
+
+![Unhandled errors box](assets/unhandled-errors.png)
 
 ```
 ╭─ ⚠ Effect — Unhandled Errors
@@ -60,6 +64,8 @@ More scenarios the plugin recognizes, shown as they render in the float.
 ### Scope required
 
 `Scope` is detected specifically so the hint suggests `Effect.scoped` instead of a generic `Effect.provide`.
+
+![Scope required box](assets/scope-required.png)
 
 ```
 ╭─ ◈ Effect — Scope Required
@@ -106,6 +112,23 @@ Layer mismatches get their own channel labels (`ROut / E / RIn`) and a `Layer.pr
 │
 │  Got:      Layer<Database | Http, never, never>
 │  Expected: Layer<Database, never, never>
+╰─
+```
+
+### Stream mismatch
+
+Stream follows the same shape as Effect, with the header re-labeled so you see at a glance which constructor you're dealing with.
+
+![Stream mismatch box](assets/stream-mismatch.png)
+
+```
+╭─ ◈ Stream — Missing Services
+│
+│  ◈ Forgot to provide: Database
+│  ⚡ Hint: .pipe(Effect.provide(SomeLayer))
+│
+│  Got:      Stream<User, NetworkError, Database>
+│  Expected: Stream<User, NetworkError, never>
 ╰─
 ```
 
