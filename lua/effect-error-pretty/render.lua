@@ -252,7 +252,9 @@ function M.artistic(diagnostic, opts)
   elseif parsed.kind == "undefined" then
     return "╭─ ❓ Undefined Reference\n│\n│  ✗ '" .. parsed.name .. "' is not defined\n╰─"
   elseif parsed.kind == "module_not_found" then
-    return "╭─ 🔗 Module Not Found\n│\n│  ✗ '" .. parsed.path .. "'\n│  ⚡ Check path or install types\n╰─"
+    return "╭─ 🔗 Module Not Found\n│\n│  ✗ '"
+      .. parsed.path
+      .. "'\n│  ⚡ Check path or install types\n╰─"
   elseif parsed.kind == "export_not_found" then
     return ("╭─ 🔗 Export Not Found\n│\n│  ✗ '%s'\n│  ◇ not exported from '%s'\n╰─"):format(
       parsed.member,
@@ -267,7 +269,10 @@ function M.artistic(diagnostic, opts)
       .. parsed.value
       .. "\n│  ⚡ Add optional chaining (?.) or null check\n╰─"
   elseif parsed.kind == "arg_count" then
-    return ("╭─ 🔢 Argument Count\n│\n│  ✗ Got %s args, expected %s\n╰─"):format(parsed.got, parsed.expected)
+    return ("╭─ 🔢 Argument Count\n│\n│  ✗ Got %s args, expected %s\n╰─"):format(
+      parsed.got,
+      parsed.expected
+    )
   elseif parsed.kind == "const_assign" then
     return "╭─ 🔒 Constant Assignment\n│\n│  ✗ '" .. parsed.name .. "' is readonly\n╰─"
   elseif parsed.kind == "deprecated" then

@@ -141,9 +141,8 @@ describe("parse.parse — Effect patterns", function()
   end)
 
   it("effect_mismatch: scope required", function()
-    local r = parse.parse(
-      "Type 'Effect<string, never, Scope>' is not assignable to type 'Effect<string, never, never>'."
-    )
+    local r =
+      parse.parse("Type 'Effect<string, never, Scope>' is not assignable to type 'Effect<string, never, never>'.")
     assert.are.equal("effect_mismatch", r.kind)
     assert.is_true(r.scope_required)
     assert.are.same({ "Scope" }, r.missing_services)

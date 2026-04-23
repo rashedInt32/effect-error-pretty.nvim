@@ -203,11 +203,8 @@ function M.parse(msg, opts)
 
   -- TS often appends follow-up sentences after the core error; strip them so
   -- the `$`-anchored patterns below can still match.
-  msg = msg
-    :gsub("\n.*", "")
-    :gsub("%.%s+Property.-$", "")
-    :gsub(" with '[^']+': %w+%'.-$", "")
-    :gsub(" with '[^']+'.-$", "")
+  msg =
+    msg:gsub("\n.*", ""):gsub("%.%s+Property.-$", ""):gsub(" with '[^']+': %w+%'.-$", ""):gsub(" with '[^']+'.-$", "")
 
   local got, expected = msg:match("Type '(.+)' is not assignable to type '(.+)'%.?$")
   if not got then
