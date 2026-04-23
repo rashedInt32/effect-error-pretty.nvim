@@ -205,6 +205,12 @@ vim.diagnostic.config({
 }
 ```
 
+### Full working example
+
+If you want to see the plugin wired up end-to-end — including the float format, sign icons, spotlight highlights, and tiny-inline-diagnostic integration — see the LazyVim config it was developed against:
+
+<https://github.com/rashedInt32/lazyvim-config>
+
 ## Options
 
 | Option                       | Default | Description                                                                                               |
