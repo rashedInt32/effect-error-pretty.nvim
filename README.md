@@ -132,6 +132,50 @@ Stream follows the same shape as Effect, with the header re-labeled so you see a
 ╰─
 ```
 
+### General TypeScript
+
+Everyday TS errors get the same treatment — not just the Effect ones. A few representative cases:
+
+**Missing property** (TS2741) — long object types wrap at `;` boundaries so the shape stays scannable.
+
+![Missing property box](assets/ts-missing-property.png)
+
+```
+╭─ ◈ Missing Property
+│
+│  ◈ Property:  'preferences'
+│  ◇ In:        { id: string;
+│               email: string;
+│               profile: { name: string; age: number; country: string; };
+│               }
+│  ◆ Required:  User
+╰─
+```
+
+**Unknown property** (TS2339 / TS2551) — the property name is lifted out of the raw message so the typo jumps at you.
+
+![Unknown property box](assets/ts-unknown-property.png)
+
+```
+╭─ ❓ Unknown Property
+│
+│  ✗ 'roles' not found
+│  ◇ on type: Session
+╰─
+```
+
+**Type mismatch** (TS2322 / TS2345) — classic Got/Expected diff, with unions shown inline.
+
+![Type mismatch box](assets/ts-type-mismatch.png)
+
+```
+╭─ ⊘ Type Mismatch
+│
+│  ✗ Got:      "verbose"
+│  ✓ Expected: "debug" | "info" | "warn" | "error"
+╰─
+```
+
 ## Features
 
 **Effect-specific**
