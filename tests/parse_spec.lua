@@ -214,6 +214,104 @@ describe("parse.parse — Effect patterns", function()
     )
     assert.are.equal("type_mismatch", r.kind)
   end)
+
+  it("splits channels correctly when A is a function type", function()
+    local r = parse.parse(
+      "Type 'Effect<(x: number) => string, never, Database>' is not assignable to type 'Effect<(x: number) => string, never, never>'."
+    )
+    assert.are.equal("effect_mismatch", r.kind)
+    assert.are.equal("(x: number) => string", r.got.A)
+    assert.are.equal("never", r.got.E)
+    assert.are.equal("Database", r.got.R)
+    assert.are.same({ "Database" }, r.missing_services)
+    assert.is_false(r.success_differs)
+  end)
+
+  it("splits channels correctly when A is an object with arrow-typed members", function()
+    local r = parse.parse(
+      "Type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, Database>' is not assignable to type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, never>'."
+    )
+    assert.are.equal("layer", r.tag)
+    assert.are.same({ "Database" }, r.missing_services)
+    assert.is_false(r.success_differs)
+  end)
+
+  it("does not shred a top-level union of Effects into fake channels", function()
+    local r = parse.parse(
+      "Type 'Effect<string, never, Database> | Effect<number, never, never>' is not assignable to type 'Effect<string, never, never>'."
+    )
+    -- The union is not a single Effect, so it must fall back rather than
+    -- inventing a service called `Database> | Effect<number`.
+    assert.are.equal("type_mismatch", r.kind)
+  end)
+
+  it("unwraps YieldWrap even when TS qualifies it with an import path", function()
+    local r = parse.parse(
+      'Type \'import("/p/node_modules/effect/Utils").YieldWrap<Effect<void, never, Database>>\' is not assignable to type \'import("/p/node_modules/effect/Utils").YieldWrap<Effect<void, never, never>>\'.'
+    )
+    assert.are.equal("effect_mismatch", r.kind)
+    assert.are.same({ "Database" }, r.missing_services)
+  end)
+
+  it("reports diff_count 0 when both sides normalize to the same signature", function()
+    local r = parse.parse(
+      'Type \'Effect<import("/app/node_modules/a/node_modules/effect/User").User, never, never>\' is not assignable to type \'Effect<import("/app/node_modules/effect/User").User, never, never>\'.'
+    )
+    assert.are.equal("effect_mismatch", r.kind)
+    assert.are.equal(0, r.diff_count)
+    assert.is_not.equal(r.raw.got, r.raw.expected)
+  end)
+end)
+
+describe("parse.parse — patterns that only appear on continuation lines", function()
+  it("not_callable (TS2349)", function()
+    local r = parse.parse("This expression is not callable.\n  Type 'String' has no call signatures.")
+    assert.are.equal("not_callable", r.kind)
+    assert.are.equal("String", r.type)
+  end)
+
+  it("nullish keeps both halves of TS2533", function()
+    local r = parse.parse("Object is possibly 'null' or 'undefined'.")
+    assert.are.equal("nullish", r.kind)
+    assert.are.equal("null or undefined", r.value)
+  end)
+
+  it("nullish names the expression for TS18048", function()
+    local r = parse.parse("'user.profile' is possibly 'undefined'.")
+    assert.are.equal("nullish", r.kind)
+    assert.are.equal("user.profile", r.name)
+    assert.are.equal("undefined", r.value)
+  end)
+
+  it("nullish keeps both halves of the named form too (TS18049)", function()
+    local r = parse.parse("'user.name' is possibly 'null' or 'undefined'.")
+    assert.are.equal("nullish", r.kind)
+    assert.are.equal("user.name", r.name)
+    assert.are.equal("null or undefined", r.value)
+  end)
+
+  it("does not claim not_callable for a TS2769 overload error", function()
+    -- TS2769 nests "has no call signatures" under its overload report, but the
+    -- expression IS callable — the argument just doesn't match an overload.
+    local r = parse.parse(
+      "No overload matches this call.\n  Overload 1 of 2, '(x: string): void', gave the following error.\n    Type 'number' has no call signatures."
+    )
+    assert.is_true(r == nil or r.kind ~= "not_callable")
+  end)
+
+  it("arg_count handles the at-least form (TS2555)", function()
+    local r = parse.parse("Expected at least 1 arguments, but got 0.")
+    assert.are.equal("arg_count", r.kind)
+    assert.are.equal("at least 1", r.expected)
+    assert.are.equal("0", r.got)
+  end)
+
+  it("arg_count handles the overload range form", function()
+    local r = parse.parse("Expected 1-2 arguments, but got 3.")
+    assert.are.equal("arg_count", r.kind)
+    assert.are.equal("1-2", r.expected)
+    assert.are.equal("3", r.got)
+  end)
 end)
 
 describe("parse.parse — extensibility", function()

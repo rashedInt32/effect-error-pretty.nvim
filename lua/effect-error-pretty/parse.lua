@@ -9,9 +9,13 @@ local function trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
--- Split a generic argument list at top-level commas, respecting nested
--- <>, [], (), {} depth.  "A, B<C, D>, E" -> { "A", "B<C, D>", "E" }.
-local function split_generic_args(s)
+-- Split `s` at top-level `sep`, respecting nested <>, [], (), {} depth.
+-- "A, B<C, D>, E" -> { "A", "B<C, D>", "E" }.
+--
+-- The `=` guard matters: a `>` right after `=` is the tail of an arrow
+-- (`(x: string) => void`), not a closing bracket.  Counting it drives depth
+-- negative, and every top-level separator after it is then missed.
+local function split_top_level(s, sep)
   local parts = {}
   local depth = 0
   local current = ""
@@ -20,36 +24,14 @@ local function split_generic_args(s)
     if c == "<" or c == "[" or c == "(" or c == "{" then
       depth = depth + 1
       current = current .. c
-    elseif c == ">" or c == "]" or c == ")" or c == "}" then
-      depth = depth - 1
-      current = current .. c
-    elseif c == "," and depth == 0 then
-      table.insert(parts, trim(current))
-      current = ""
-    else
-      current = current .. c
-    end
-  end
-  if #trim(current) > 0 then
-    table.insert(parts, trim(current))
-  end
-  return parts
-end
-
--- Split a top-level union "A | B | C<D | E>" into members, respecting depth.
-local function split_union(s)
-  local parts = {}
-  local depth = 0
-  local current = ""
-  for i = 1, #s do
-    local c = s:sub(i, i)
-    if c == "<" or c == "[" or c == "(" or c == "{" then
-      depth = depth + 1
+    elseif c == ">" and s:sub(i - 1, i - 1) == "=" then
       current = current .. c
     elseif c == ">" or c == "]" or c == ")" or c == "}" then
-      depth = depth - 1
+      if depth > 0 then
+        depth = depth - 1
+      end
       current = current .. c
-    elseif c == "|" and depth == 0 then
+    elseif c == sep and depth == 0 then
       local t = trim(current)
       if t ~= "" then
         table.insert(parts, t)
@@ -65,16 +47,54 @@ local function split_union(s)
   end
   return parts
 end
+
+local function split_generic_args(s)
+  return split_top_level(s, ",")
+end
+
+local function split_union(s)
+  return split_top_level(s, "|")
+end
 M.split_union = split_union
 
+-- Inner text of `Name<...>`, but only when the angle bracket that opens after
+-- `Name` closes at the very last character.  A greedy `^Name<(.+)>$` also
+-- matches a top-level union like `Effect<A> | Effect<B>`, which then splits
+-- into nonsense channels.
+local function match_generic(s, name)
+  local open = name .. "<"
+  if s:sub(1, #open) ~= open or s:sub(-1) ~= ">" then
+    return nil
+  end
+  local depth = 0
+  for i = #open, #s do
+    local c = s:sub(i, i)
+    if c == "<" then
+      depth = depth + 1
+    elseif c == ">" and s:sub(i - 1, i - 1) ~= "=" then
+      depth = depth - 1
+      if depth == 0 then
+        if i ~= #s then
+          return nil
+        end
+        return trim(s:sub(#open + 1, #s - 1))
+      end
+    end
+  end
+  return nil
+end
+M.match_generic = match_generic
+
 -- Strip common Effect-ecosystem noise before matching the outer shape.
+-- Import qualifiers come off first: TS prints unimported types fully qualified
+-- (`import("…/effect/Utils").YieldWrap<…>`), so the unwrap below has to be
+-- looking at a bare name.
 local function clean_effect_string(s)
   if not s then
     return s
   end
-  s = s:gsub("^YieldWrap<(.+)>$", "%1")
-  s = s:gsub('import%("[^"]+"%)%.', "")
-  return trim(s)
+  s = trim(s:gsub('import%("[^"]+"%)%.', ""))
+  return match_generic(s, "YieldWrap") or match_generic(s, "Utils.YieldWrap") or s
 end
 
 -- Unwrap Context.Tag<"Id", Service>  ->  Service.  Handles both the bare
@@ -106,15 +126,15 @@ local function parse_effect_type(s)
   s = clean_effect_string(s)
 
   local tag, inner
-  inner = s:match("^Effect%.Effect<(.+)>$") or s:match("^Effect<(.+)>$")
+  inner = match_generic(s, "Effect.Effect") or match_generic(s, "Effect")
   if inner then
     tag = "effect"
   else
-    inner = s:match("^Stream%.Stream<(.+)>$") or s:match("^Stream<(.+)>$")
+    inner = match_generic(s, "Stream.Stream") or match_generic(s, "Stream")
     if inner then
       tag = "stream"
     else
-      inner = s:match("^Layer%.Layer<(.+)>$") or s:match("^Layer<(.+)>$")
+      inner = match_generic(s, "Layer.Layer") or match_generic(s, "Layer")
       if inner then
         tag = "layer"
       end
@@ -197,14 +217,22 @@ end
 function M.parse(msg, opts)
   opts = opts or {}
 
-  -- Capture "Property 'X' is missing" before trimming, since TS often puts
-  -- this detail on a continuation line we're about to strip.
+  -- Capture details that live on a continuation line before we strip it.
+  -- TS2741 puts "Property 'X' is missing" there, and TS2349 puts the only half
+  -- that names the type ("Type 'X' has no call signatures").
   local missing_prop_full = msg:match("Property '([^']+)' is missing")
+
+  -- TS2349's headline is "This expression is not callable."; the type only
+  -- appears on the next line.  TS2769 ("No overload matches this call") nests
+  -- the same "has no call signatures" text under an overload report, so the
+  -- headline has to agree before we claim the expression isn't callable.
+  local headline = msg:match("^[^\n]*") or ""
+  local no_call_sigs = headline:match("is not callable") ~= nil and msg:match("has no call signatures") ~= nil
+  local no_call_type = no_call_sigs and msg:match("Type '([^']+)' has no call signatures") or nil
 
   -- TS often appends follow-up sentences after the core error; strip them so
   -- the `$`-anchored patterns below can still match.
-  msg =
-    msg:gsub("\n.*", ""):gsub("%.%s+Property.-$", ""):gsub(" with '[^']+': %w+%'.-$", ""):gsub(" with '[^']+'.-$", "")
+  msg = msg:gsub("\n.*", ""):gsub("%.%s+Property.-$", ""):gsub(" with '[^']+'.-$", "")
 
   local got, expected = msg:match("Type '(.+)' is not assignable to type '(.+)'%.?$")
   if not got then
@@ -241,6 +269,10 @@ function M.parse(msg, opts)
           success_differs = success_differs,
           scope_required = scope_required,
           diff_count = diff_count,
+          -- Pre-normalization types. When diff_count == 0 these are the only
+          -- thing that still differs (duplicate package copies), so the
+          -- renderer needs them to say anything useful.
+          raw = { got = got, expected = expected },
         }
       end
     end
@@ -288,12 +320,35 @@ function M.parse(msg, opts)
     return { kind = "used_before_assigned", name = used_before }
   end
 
+  -- TS2533 is "possibly 'null' or 'undefined'" — capture both halves, not just
+  -- the first.  TS18048 names the expression instead of saying "Object".
+  local null_a, null_b = msg:match("Object is possibly '(.-)' or '(.-)'")
+  if null_a then
+    return { kind = "nullish", value = null_a .. " or " .. null_b }
+  end
   local nullish = msg:match("Object is possibly '(.-)'")
   if nullish then
     return { kind = "nullish", value = nullish }
   end
+  -- Both-halves form first: the two-capture pattern below would stop at the
+  -- first quote and silently drop the "or undefined".
+  local nn_name, nn_a, nn_b = msg:match("'(.-)' is possibly '(.-)' or '(.-)'")
+  if nn_name then
+    return { kind = "nullish", name = nn_name, value = nn_a .. " or " .. nn_b }
+  end
+  local nullish_name, nullish_val = msg:match("'(.-)' is possibly '(.-)'")
+  if nullish_name then
+    return { kind = "nullish", name = nullish_name, value = nullish_val }
+  end
 
+  -- TS2554 is a plain count; TS2555 and overloads use "at least N" and "N-M".
   local exp_args, got_args = msg:match("Expected (%d+) arguments?, but got (%d+)")
+  if not exp_args then
+    exp_args, got_args = msg:match("Expected (at least %d+) arguments?, but got (%d+)")
+  end
+  if not exp_args then
+    exp_args, got_args = msg:match("Expected (%d+%-%d+) arguments?, but got (%d+)")
+  end
   if exp_args then
     return { kind = "arg_count", expected = exp_args, got = got_args }
   end
@@ -303,9 +358,8 @@ function M.parse(msg, opts)
     return { kind = "const_assign", name = const_name }
   end
 
-  if msg:match("has no call signatures") then
-    local t = msg:match("Type '(.-)' has no call signatures")
-    return { kind = "not_callable", type = t }
+  if no_call_sigs then
+    return { kind = "not_callable", type = no_call_type }
   end
 
   local dep_sig, dep_name = msg:match("The signature '(.-)' of '(.-)' is deprecated")
@@ -317,9 +371,15 @@ function M.parse(msg, opts)
     return { kind = "deprecated", name = deprecated_name }
   end
 
-  -- User-provided extra parsers (setup opts.extra_patterns).
-  if opts.extra_patterns then
-    for _, parser in ipairs(opts.extra_patterns) do
+  -- User-provided extra parsers (setup opts.extra_patterns).  A bare function
+  -- is accepted alongside a list, since that mistake is easy to make and the
+  -- alternative is an `ipairs` error on every TS diagnostic.
+  local extra = opts.extra_patterns
+  if type(extra) == "function" then
+    extra = { extra }
+  end
+  if type(extra) == "table" then
+    for _, parser in ipairs(extra) do
       local result = parser(msg)
       if result then
         return result
