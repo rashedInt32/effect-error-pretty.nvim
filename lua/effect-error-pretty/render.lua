@@ -18,6 +18,27 @@ local function prettify_type(s)
   return s
 end
 
+-- Truncate to `n` characters rather than bytes.  Type strings carry non-ASCII
+-- (template-literal types, unicode identifiers), and a byte-wise cut lands
+-- mid-codepoint and renders as a replacement glyph.
+local function truncate(s, n)
+  if not s then
+    return s
+  end
+  if vim.fn.strchars(s) <= n then
+    return s
+  end
+  return vim.fn.strcharpart(s, 0, n) .. "…"
+end
+M.truncate = truncate
+
+-- Continuation lines sit directly under the first character of `prefix`, so
+-- wrapped types stay aligned with the label that introduces them.
+local function indent_for(prefix)
+  return "│" .. string.rep(" ", math.max(vim.fn.strdisplaywidth(prefix) - 1, 0))
+end
+M.indent_for = indent_for
+
 -- Wrap long type strings onto multiple lines at semicolons (object members)
 -- and soft whitespace boundaries.  Returns a list of display lines where the
 -- first line is bare and continuations carry `indent` as a prefix.
@@ -90,6 +111,44 @@ local function strip_fences(s)
 end
 M.strip_fences = strip_fences
 
+-- Append `prefix .. value` to `lines`, wrapping long values onto continuation
+-- lines that align under the prefix.
+local function push_wrapped(lines, prefix, value)
+  local chunks = format_type_multiline(value, indent_for(prefix))
+  table.insert(lines, prefix .. (chunks[1] or ""))
+  for i = 2, #chunks do
+    table.insert(lines, chunks[i])
+  end
+end
+
+-- Hard-wrap without prettifying.  `push_wrapped` runs prettify_type, which
+-- strips `import("…").` — exactly the text the identical-signatures box exists
+-- to show.  Import paths have no good break points, so wrap on width.
+local function push_raw_wrapped(lines, prefix, value)
+  local budget = 70
+  local total = vim.fn.strchars(value)
+  if total <= budget then
+    table.insert(lines, prefix .. value)
+    return
+  end
+  local indent = indent_for(prefix)
+  local pos = 0
+  while pos < total do
+    table.insert(lines, (pos == 0 and prefix or indent) .. vim.fn.strcharpart(value, pos, budget))
+    pos = pos + budget
+  end
+end
+
+-- Only a bare Scope counts.  A prefix match also catches services like
+-- ScopeManager, which then get a Scope title over an Effect.provide hint.
+local function is_scope_only(parsed)
+  if not parsed.scope_required or #parsed.missing_services ~= 1 then
+    return false
+  end
+  local svc = parsed.missing_services[1]
+  return svc == "Scope" or svc == "Scope.Scope"
+end
+
 -- ── artistic (float) renderer ──────────────────────────────────────────────
 
 local function render_effect_mismatch(parsed)
@@ -99,12 +158,8 @@ local function render_effect_mismatch(parsed)
   local is_layer = parsed.tag == "layer"
   local lines = {}
 
-  local function push_multiline(indent_prefix, first_prefix, value)
-    local chunks = format_type_multiline(value, indent_prefix)
-    table.insert(lines, first_prefix .. (chunks[1] or ""))
-    for i = 2, #chunks do
-      table.insert(lines, chunks[i])
-    end
+  local function push_multiline(first_prefix, value)
+    push_wrapped(lines, first_prefix, value)
   end
 
   local function signature(shape)
@@ -113,16 +168,31 @@ local function render_effect_mismatch(parsed)
 
   local function push_signatures()
     table.insert(lines, "│")
-    push_multiline("│              ", "│  Got:      ", signature(g))
-    push_multiline("│              ", "│  Expected: ", signature(e))
+    push_multiline("│  Got:      ", signature(g))
+    push_multiline("│  Expected: ", signature(e))
+  end
+
+  -- Both sides normalize to the same signature, so a Got/Expected diff would
+  -- print two identical lines.  What actually differs is the import path.
+  if parsed.diff_count == 0 then
+    table.insert(lines, "╭─ ⊘ " .. name .. " — Identical Signatures")
+    table.insert(lines, "│")
+    push_multiline("│  ⚠ Both sides are: ", signature(g))
+    table.insert(lines, "│  ⚡ Hint: usually two copies of the same package")
+    if parsed.raw and parsed.raw.got ~= parsed.raw.expected then
+      table.insert(lines, "│")
+      push_raw_wrapped(lines, "│  Got:      ", parsed.raw.got)
+      push_raw_wrapped(lines, "│  Expected: ", parsed.raw.expected)
+    end
+    table.insert(lines, "╰─")
+    return table.concat(lines, "\n")
   end
 
   -- Compact single-channel-diff mode.
   if parsed.diff_count == 1 then
     if #parsed.missing_services > 0 then
-      local only_scope = #parsed.missing_services == 1 and parsed.missing_services[1]:match("^Scope")
       local title
-      if only_scope then
+      if is_scope_only(parsed) then
         title = name .. " — Scope Required"
       elseif is_layer then
         title = name .. " — Missing RIn"
@@ -132,12 +202,17 @@ local function render_effect_mismatch(parsed)
       table.insert(lines, "╭─ ◈ " .. title)
       table.insert(lines, "│")
       table.insert(lines, "│  ◈ Forgot to provide: " .. table.concat(parsed.missing_services, " | "))
-      if parsed.scope_required then
+      if is_scope_only(parsed) then
         table.insert(lines, "│  ⚡ Hint: wrap in Effect.scoped(...) — Scope is required")
       elseif is_layer then
         table.insert(lines, "│  ⚡ Hint: compose with Layer.provide(...) or Layer.merge(...)")
       else
         table.insert(lines, "│  ⚡ Hint: .pipe(Effect.provide(SomeLayer))")
+        -- Scope rides along with real services: provide handles them, but Scope
+        -- still needs Effect.scoped, so don't leave that half unsaid.
+        if parsed.scope_required then
+          table.insert(lines, "│  ⚡ Hint: Scope also needs Effect.scoped(...)")
+        end
       end
       push_signatures()
       table.insert(lines, "╰─")
@@ -158,8 +233,8 @@ local function render_effect_mismatch(parsed)
       local a_label = labels[1]
       table.insert(lines, "╭─ ⊘ " .. name .. " — " .. a_label .. " Mismatch")
       table.insert(lines, "│")
-      push_multiline("│              ", "│  ✗ Got " .. a_label .. ":    ", g.A)
-      push_multiline("│              ", "│  ✓ Expected: ", e.A)
+      push_multiline("│  ✗ Got " .. a_label .. ":    ", g.A)
+      push_multiline("│  ✓ Expected: ", e.A)
       push_signatures()
       table.insert(lines, "╰─")
       return table.concat(lines, "\n")
@@ -170,14 +245,14 @@ local function render_effect_mismatch(parsed)
   table.insert(lines, "╭─ ⊘ " .. name .. " Mismatch")
   table.insert(lines, "│")
   table.insert(lines, "│  ✗ Got:")
-  push_multiline("│        ", "│     " .. labels[1] .. ": ", g.A)
-  push_multiline("│        ", "│     " .. labels[2] .. ": ", g.E)
-  push_multiline("│        ", "│     " .. labels[3] .. ": ", g.R)
+  push_multiline("│     " .. labels[1] .. ": ", g.A)
+  push_multiline("│     " .. labels[2] .. ": ", g.E)
+  push_multiline("│     " .. labels[3] .. ": ", g.R)
   table.insert(lines, "│")
   table.insert(lines, "│  ✓ Expected:")
-  push_multiline("│        ", "│     " .. labels[1] .. ": ", e.A)
-  push_multiline("│        ", "│     " .. labels[2] .. ": ", e.E)
-  push_multiline("│        ", "│     " .. labels[3] .. ": ", e.R)
+  push_multiline("│     " .. labels[1] .. ": ", e.A)
+  push_multiline("│     " .. labels[2] .. ": ", e.E)
+  push_multiline("│     " .. labels[3] .. ": ", e.R)
   if #parsed.missing_services > 0 then
     table.insert(lines, "│")
     table.insert(lines, "│  ◈ Forgot to provide: " .. table.concat(parsed.missing_services, " | "))
@@ -204,18 +279,10 @@ function M.artistic(diagnostic, opts)
   if parsed.kind == "effect_mismatch" then
     return render_effect_mismatch(parsed)
   elseif parsed.kind == "type_mismatch" then
-    local got_lines = format_type_multiline(parsed.got, "│              ")
-    local expected_lines = format_type_multiline(parsed.expected, "│              ")
     table.insert(lines, "╭─ ⊘ Type Mismatch")
     table.insert(lines, "│")
-    table.insert(lines, "│  ✗ Got:      " .. (got_lines[1] or ""))
-    for i = 2, #got_lines do
-      table.insert(lines, got_lines[i])
-    end
-    table.insert(lines, "│  ✓ Expected: " .. (expected_lines[1] or ""))
-    for i = 2, #expected_lines do
-      table.insert(lines, expected_lines[i])
-    end
+    push_wrapped(lines, "│  ✗ Got:      ", parsed.got)
+    push_wrapped(lines, "│  ✓ Expected: ", parsed.expected)
     if parsed.missing then
       table.insert(lines, "│")
       table.insert(lines, "│  ◈ Missing:  '" .. parsed.missing .. "'")
@@ -223,30 +290,18 @@ function M.artistic(diagnostic, opts)
     table.insert(lines, "╰─")
     return table.concat(lines, "\n")
   elseif parsed.kind == "missing_property" then
-    local in_lines = format_type_multiline(parsed.in_type, "│              ")
-    local req_lines = format_type_multiline(parsed.required, "│              ")
     table.insert(lines, "╭─ ◈ Missing Property")
     table.insert(lines, "│")
     table.insert(lines, "│  ◈ Property:  '" .. parsed.prop .. "'")
-    table.insert(lines, "│  ◇ In:        " .. (in_lines[1] or ""))
-    for i = 2, #in_lines do
-      table.insert(lines, in_lines[i])
-    end
-    table.insert(lines, "│  ◆ Required:  " .. (req_lines[1] or ""))
-    for i = 2, #req_lines do
-      table.insert(lines, req_lines[i])
-    end
+    push_wrapped(lines, "│  ◇ In:        ", parsed.in_type)
+    push_wrapped(lines, "│  ◆ Required:  ", parsed.required)
     table.insert(lines, "╰─")
     return table.concat(lines, "\n")
   elseif parsed.kind == "unknown_property" then
-    local on_lines = format_type_multiline(parsed.on_type, "│             ")
     table.insert(lines, "╭─ ❓ Unknown Property")
     table.insert(lines, "│")
     table.insert(lines, "│  ✗ '" .. parsed.prop .. "' not found")
-    table.insert(lines, "│  ◇ on type: " .. (on_lines[1] or ""))
-    for i = 2, #on_lines do
-      table.insert(lines, on_lines[i])
-    end
+    push_wrapped(lines, "│  ◇ on type: ", parsed.on_type)
     table.insert(lines, "╰─")
     return table.concat(lines, "\n")
   elseif parsed.kind == "undefined" then
@@ -265,7 +320,10 @@ function M.artistic(diagnostic, opts)
   elseif parsed.kind == "used_before_assigned" then
     return "╭─ ⚠ Uninitialized Variable\n│\n│  ✗ '" .. parsed.name .. "' used before assignment\n╰─"
   elseif parsed.kind == "nullish" then
-    return "╭─ ❓ Nullish Reference\n│\n│  ⚠ Object may be "
+    local subject = parsed.name and ("'" .. parsed.name .. "'") or "Object"
+    return "╭─ ❓ Nullish Reference\n│\n│  ⚠ "
+      .. subject
+      .. " may be "
       .. parsed.value
       .. "\n│  ⚡ Add optional chaining (?.) or null check\n╰─"
   elseif parsed.kind == "arg_count" then
@@ -278,13 +336,9 @@ function M.artistic(diagnostic, opts)
   elseif parsed.kind == "deprecated" then
     return "╭─ ⚠ Deprecated\n│\n│  ⚠ '" .. parsed.name .. "' is deprecated\n╰─"
   elseif parsed.kind == "not_callable" then
-    local type_lines = parsed.type and format_type_multiline(parsed.type, "│       ") or { "Expression" }
     table.insert(lines, "╭─ ⊘ Not Callable")
     table.insert(lines, "│")
-    table.insert(lines, "│  ✗ " .. (type_lines[1] or ""))
-    for i = 2, #type_lines do
-      table.insert(lines, type_lines[i])
-    end
+    push_wrapped(lines, "│  ✗ ", parsed.type or "Expression")
     table.insert(lines, "│    is not a function")
     table.insert(lines, "╰─")
     return table.concat(lines, "\n")
@@ -303,37 +357,59 @@ function M.short(diagnostic, opts)
   end
 
   if parsed.kind == "effect_mismatch" then
-    if parsed.scope_required and #parsed.missing_services == 1 and parsed.missing_services[1]:match("^Scope") then
-      return "◈ Needs Effect.scoped"
+    local function a_diff()
+      return "✗ "
+        .. parsed.labels[1]
+        .. ": "
+        .. truncate(parsed.got.A, 30)
+        .. " → ✓ "
+        .. truncate(parsed.expected.A, 30)
     end
+
+    if parsed.diff_count == 0 then
+      return "⊘ " .. display_name(parsed.tag) .. ": identical signatures (duplicate package?)"
+    end
+
+    -- Compact forms are only honest when exactly one channel diverges, which is
+    -- the same gate `artistic` uses.  Without it a multi-channel error reports
+    -- just the R diff inline, and the E diff the float shows disappears.
+    if parsed.diff_count == 1 then
+      if is_scope_only(parsed) then
+        return "◈ Needs Effect.scoped"
+      end
+      if #parsed.missing_services > 0 then
+        return "◈ Missing provide: " .. table.concat(parsed.missing_services, " | ")
+      end
+      if #parsed.unhandled_errors > 0 then
+        return "⚠ Unhandled: " .. table.concat(parsed.unhandled_errors, " | ")
+      end
+      if parsed.success_differs then
+        return a_diff()
+      end
+      return "⊘ " .. display_name(parsed.tag) .. " mismatch"
+    end
+
+    local segs = {}
     if #parsed.missing_services > 0 then
-      return "◈ Missing provide: " .. table.concat(parsed.missing_services, " | ")
+      table.insert(segs, "◈ Missing provide: " .. table.concat(parsed.missing_services, " | "))
+    elseif parsed.got.R ~= parsed.expected.R then
+      table.insert(segs, "◈ " .. parsed.labels[3] .. " differs")
     end
     if #parsed.unhandled_errors > 0 then
-      return "⚠ Unhandled: " .. table.concat(parsed.unhandled_errors, " | ")
+      table.insert(segs, "⚠ Unhandled: " .. table.concat(parsed.unhandled_errors, " | "))
+    elseif parsed.got.E ~= parsed.expected.E then
+      table.insert(segs, "⚠ " .. parsed.labels[2] .. " differs")
     end
     if parsed.success_differs then
-      local label = parsed.labels[1]
-      local g = parsed.got.A:sub(1, 30)
-      local e = parsed.expected.A:sub(1, 30)
-      if #parsed.got.A > 30 then
-        g = g .. "…"
-      end
-      if #parsed.expected.A > 30 then
-        e = e .. "…"
-      end
-      return "✗ " .. label .. ": " .. g .. " → ✓ " .. e
+      table.insert(segs, a_diff())
     end
-    return "⊘ " .. display_name(parsed.tag) .. " mismatch"
+    if #segs == 0 then
+      return "⊘ " .. display_name(parsed.tag) .. " mismatch"
+    end
+    return table.concat(segs, "  ")
   elseif parsed.kind == "type_mismatch" then
-    local got = parsed.got:gsub("import%([^)]+%)%.", ""):sub(1, 50)
-    local expected = parsed.expected:gsub("import%([^)]+%)%.", ""):sub(1, 50)
-    if #parsed.got > 50 then
-      got = got .. "…"
-    end
-    if #parsed.expected > 50 then
-      expected = expected .. "…"
-    end
+    local got = truncate((parsed.got:gsub("import%([^)]+%)%.", "")), 50)
+    local expected = truncate((parsed.expected:gsub("import%([^)]+%)%.", "")), 50)
     return "✗ " .. got .. " → ✓ " .. expected
   elseif parsed.kind == "missing_property" then
     return "◈ Missing: '" .. parsed.prop .. "'"
@@ -343,10 +419,21 @@ function M.short(diagnostic, opts)
     return "✗ Undefined: '" .. parsed.name .. "'"
   elseif parsed.kind == "module_not_found" then
     return "✗ Module: '" .. parsed.path:gsub(".*/", "") .. "'"
+  elseif parsed.kind == "export_not_found" then
+    return "✗ No export: '" .. parsed.member .. "'"
   elseif parsed.kind == "implicit_any" then
     return "⚠ Needs type: '" .. parsed.name .. "'"
+  elseif parsed.kind == "used_before_assigned" then
+    return "⚠ '" .. parsed.name .. "' used before assignment"
   elseif parsed.kind == "nullish" then
-    return "⚠ Possibly nullish"
+    local subject = parsed.name and ("'" .. parsed.name .. "'") or "Object"
+    return "⚠ " .. subject .. " may be " .. parsed.value
+  elseif parsed.kind == "arg_count" then
+    return "✗ Expected " .. parsed.expected .. " args, got " .. parsed.got
+  elseif parsed.kind == "const_assign" then
+    return "✗ '" .. parsed.name .. "' is readonly"
+  elseif parsed.kind == "not_callable" then
+    return "✗ Not callable" .. (parsed.type and (": " .. truncate(parsed.type, 30)) or "")
   elseif parsed.kind == "deprecated" then
     return "⚠ Deprecated: '" .. parsed.name .. "'"
   end
