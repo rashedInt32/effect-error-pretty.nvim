@@ -3,6 +3,27 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-07-13
+
+Layout fixes. No API or behavior changes; nothing to migrate.
+
+### Fixed
+
+- **Wrapped lines could run past the box.** The wrap budget was a flat 70
+  columns that ignored the prefix the line was drawn under, so an indented
+  continuation could reach ~85 columns. The budget is now measured against the
+  prefix, and in display cells rather than bytes (`#s` counts bytes, which
+  overshoots for non-ASCII types).
+- **Everything was off by one column under `set ambiwidth=double`.** The box
+  gutter `│` is an East-Asian *ambiguous* width character — one cell normally,
+  two under that option — and the indent assumed it was always one.
+- Object members are no longer soft-wrapped mid-member: the `;` between members
+  is the meaningful break, and wrapping on a space just orphaned the closing
+  `};` onto a line of its own.
+- The identical-signatures box now wraps long import paths at `/` boundaries
+  instead of overflowing the box, so the duplicated `node_modules/…` segment
+  that explains the error stays readable.
+
 ## [0.1.0] — 2026-07-13
 
 First tagged release. Up to now the plugin has only been installable from
@@ -109,4 +130,5 @@ If you are pinning for the first time, note the one breaking change below.
 - Test coverage went from 32 to 76 cases. `render.lua` and `init.lua` previously
   had none at all, which is why most of the above shipped.
 
+[0.1.1]: https://github.com/rashedInt32/effect-error-pretty.nvim/releases/tag/v0.1.1
 [0.1.0]: https://github.com/rashedInt32/effect-error-pretty.nvim/releases/tag/v0.1.0

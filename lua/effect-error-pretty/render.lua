@@ -32,12 +32,25 @@ local function truncate(s, n)
 end
 M.truncate = truncate
 
+-- The box gutter.  `│` is an East-Asian *ambiguous* width character: it is one
+-- cell normally but two under `set ambiwidth=double`, so never assume 1.
+local GUTTER = "│"
+
+-- Target width of a rendered box line, gutter included.
+local BOX_WIDTH = 70
+
 -- Continuation lines sit directly under the first character of `prefix`, so
 -- wrapped types stay aligned with the label that introduces them.
 local function indent_for(prefix)
-  return "│" .. string.rep(" ", math.max(vim.fn.strdisplaywidth(prefix) - 1, 0))
+  local pad = vim.fn.strdisplaywidth(prefix) - vim.fn.strdisplaywidth(GUTTER)
+  return GUTTER .. string.rep(" ", math.max(pad, 0))
 end
 M.indent_for = indent_for
+
+-- How much room a wrapped line has left for content once its prefix is drawn.
+local function content_budget(indent)
+  return math.max(30, BOX_WIDTH - vim.fn.strdisplaywidth(indent))
+end
 
 -- Wrap long type strings onto multiple lines at semicolons (object members)
 -- and soft whitespace boundaries.  Returns a list of display lines where the
@@ -49,8 +62,11 @@ local function format_type_multiline(type_str, indent)
     return {}
   end
 
-  local max_line_len = 70
-  if #type_str <= max_line_len then
+  -- Budget the content, not the whole line: the old fixed 70 ignored the
+  -- prefix, so an indented line could run ~85 columns wide.  Measure display
+  -- cells too — `#s` counts bytes, which overshoots for non-ASCII types.
+  local max_line_len = content_budget(indent)
+  if vim.fn.strdisplaywidth(type_str) <= max_line_len then
     return { type_str }
   end
 
@@ -72,7 +88,9 @@ local function format_type_multiline(type_str, indent)
     if char == ";" and brace_depth == 1 then
       table.insert(lines, trim(current))
       current = ""
-    elseif #current >= max_line_len and char == " " then
+    elseif char == " " and brace_depth == 0 and vim.fn.strdisplaywidth(current) >= max_line_len then
+      -- Soft-wrap only outside braces.  Inside an object the `;` above is the
+      -- semantic break; wrapping mid-member on a space just orphans the `};`.
       table.insert(lines, trim(current))
       current = ""
     end
@@ -125,18 +143,43 @@ end
 -- strips `import("…").` — exactly the text the identical-signatures box exists
 -- to show.  Import paths have no good break points, so wrap on width.
 local function push_raw_wrapped(lines, prefix, value)
-  local budget = 70
-  local total = vim.fn.strchars(value)
-  if total <= budget then
+  local indent = indent_for(prefix)
+  local budget = content_budget(indent)
+  if vim.fn.strdisplaywidth(value) <= budget then
     table.insert(lines, prefix .. value)
     return
   end
-  local indent = indent_for(prefix)
-  local pos = 0
-  while pos < total do
-    table.insert(lines, (pos == 0 and prefix or indent) .. vim.fn.strcharpart(value, pos, budget))
-    pos = pos + budget
+
+  local first, current = true, ""
+  local function flush()
+    if current ~= "" then
+      table.insert(lines, (first and prefix or indent) .. current)
+      first, current = false, ""
+    end
   end
+
+  -- Break after `/` so a path stays readable; hard-cut only a run that is
+  -- itself wider than the budget.
+  local pos = 1
+  while pos <= #value do
+    local slash = value:find("/", pos, true)
+    local seg
+    if slash then
+      seg, pos = value:sub(pos, slash), slash + 1
+    else
+      seg, pos = value:sub(pos), #value + 1
+    end
+    if current ~= "" and vim.fn.strdisplaywidth(current .. seg) > budget then
+      flush()
+    end
+    current = current .. seg
+    while vim.fn.strdisplaywidth(current) > budget do
+      table.insert(lines, (first and prefix or indent) .. vim.fn.strcharpart(current, 0, budget))
+      first = false
+      current = vim.fn.strcharpart(current, budget)
+    end
+  end
+  flush()
 end
 
 -- Only a bare Scope counts.  A prefix match also catches services like

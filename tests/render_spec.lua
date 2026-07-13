@@ -98,6 +98,30 @@ describe("render.artistic — box alignment", function()
       box("Type 'Layer<" .. OBJ .. ", DbError, Database>' is not assignable to type 'Layer<void, never, never>'.")
     assert_first_continuation_aligns(out, "│     ROut:")
   end)
+
+  it("budgets the wrap against the prefix so lines stay inside the box", function()
+    -- The wrap budget used to be a flat 70 that ignored the prefix, so an
+    -- indented continuation could run ~85 columns wide.
+    local union =
+      '"alpha" | "bravo" | "charlie" | "delta" | "echo" | "foxtrot" | "golf" | "hotel" | "india" | "juliett"'
+    local out = box("Type '" .. union .. "' is not assignable to type 'number'.")
+    for _, l in ipairs(vim.split(out, "\n")) do
+      local w = vim.fn.strdisplaywidth(l)
+      assert.is_true(w <= 80, ("line runs %d columns: %s"):format(w, l))
+    end
+  end)
+
+  it("still aligns when the gutter glyph is double-width (ambiwidth=double)", function()
+    -- `│` is East-Asian ambiguous: one cell normally, two under ambiwidth=double.
+    local saved = vim.o.ambiwidth
+    vim.o.ambiwidth = "double"
+    local ok, err = pcall(function()
+      local out = box("Type '" .. OBJ .. "' is not assignable to type 'User'.")
+      assert_first_continuation_aligns(out, "│  ✗ Got:")
+    end)
+    vim.o.ambiwidth = saved
+    assert.is_true(ok, tostring(err))
+  end)
 end)
 
 describe("render.artistic — TypeScript", function()
@@ -176,7 +200,12 @@ describe("hints agree with their titles", function()
     local out = box(
       "Type 'Effect<import(\"/app/node_modules/a/node_modules/effect/User\").User, never, never>' is not assignable to type 'Effect<import(\"/app/node_modules/effect/User\").User, never, never>'."
     )
-    -- Prettifying these away would leave two lines that read identically.
-    assert.is_truthy(out:find("a/node_modules/effect/User", 1, true))
+    -- Prettifying these away would leave two lines that read identically. The
+    -- nested copy is the whole tell, so it has to survive the wrap intact.
+    assert.is_truthy(out:find("import(", 1, true))
+    assert.is_truthy(out:find("node_modules/a/node_modules", 1, true))
+    for _, l in ipairs(vim.split(out, "\n")) do
+      assert.is_true(vim.fn.strdisplaywidth(l) <= 80)
+    end
   end)
 end)
