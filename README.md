@@ -188,6 +188,7 @@ Everyday TS errors get the same treatment, not just the Effect ones. A few repre
 - **`YieldWrap<...>` unwrapping**: Effect.gen yields render as plain Effect mismatches
 - **Short signatures**: `Effect<A>` and `Effect<A, E>` default missing params to `never`
 - **Multi-channel view**: falls back to a full tri-channel table when 2+ channels diverge
+- **Identical signatures**: when both sides normalize to the same type, says so (and points at duplicate copies of a package) instead of printing a Got/Expected diff of a type against itself
 - **Type signature at the bottom** of every compact box so you always see the full `Effect<...>` context
 
 **General TypeScript**
@@ -195,9 +196,9 @@ Everyday TS errors get the same treatment, not just the Effect ones. A few repre
 - Missing property (TS2741), Unknown property (TS2339)
 - Cannot find name / module / exported member (TS2304 / TS2307 / TS2305)
 - Implicit any (TS7006), Uninitialized variable (TS2454), Nullish (TS2531 / TS18048)
-- Argument count (TS2554), Const reassignment, Not callable (TS2349)
+- Argument count (TS2554 / TS2555, including the `at least N` and `N-M` forms), Const reassignment, Not callable (TS2349)
 - Deprecated symbol messages
-- Optional fallback to [`format-ts-errors`](https://www.npmjs.com/package/@0no-co/format-ts-errors) when no pattern matches
+- Optional fallback to [`format-ts-errors.nvim`](https://github.com/davidosomething/format-ts-errors.nvim) when no pattern matches
 
 ## Install
 
@@ -261,9 +262,11 @@ If you want to see the plugin wired up end-to-end (float format, sign icons, spo
 |------------------------------|---------|-----------------------------------------------------------------------------------------------------------|
 | `effect`                     | `true`  | Recognize `Effect` / `Stream` / `Layer` mismatches as first-class.                                        |
 | `float`                      | `false` | Automatically patch `vim.diagnostic.config.float.format` on `setup()`.                                    |
-| `sources`                    | `{ typescript=true, ts=true, vtsls=true }` | Diagnostic sources this plugin handles. Exact match only. |
-| `format_ts_errors_fallback`  | `true`  | When no pattern matches, try `format-ts-errors` if installed.                                             |
+| `sources`                    | `{ typescript=true, ts=true, vtsls=true }` | Diagnostic sources this plugin handles. Exact match only. Merged with the defaults, so `{ deno = true }` *adds* Deno — pass `{ typescript = false }` to drop one. |
+| `format_ts_errors_fallback`  | `true`  | When no pattern matches, try [`format-ts-errors.nvim`](https://github.com/davidosomething/format-ts-errors.nvim) if installed. |
 | `extra_patterns`             | `nil`   | List of `function(msg) -> {kind, ...}` parsers run after builtins. Let you add custom shapes.              |
+
+If `float = true` and something else later calls `vim.diagnostic.config({ float = ... })`, Neovim replaces the whole `float` table — the formatter reinstalls itself on `LspAttach`, so the ordering doesn't matter.
 
 ## Public API
 
@@ -303,10 +306,13 @@ Render logic for custom `kind`s isn't wired in yet. For now, `parse()` returns t
 ## Tests
 
 ```sh
-nvim --headless -c "PlenaryBustedDirectory tests/" -c "qa!"
+nvim --headless -u tests/minimal_init.lua \
+  -c "PlenaryBustedDirectory tests/ { minimal_init = 'tests/minimal_init.lua' }" -c "qa!"
 ```
 
-Requires [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) on the runtimepath.
+`PlenaryBustedDirectory` spawns one child Neovim per spec file, and those children only pick up `minimal_init.lua` if it's passed in the command — without it they load your personal config instead.
+
+Requires [plenary.nvim](https://github.com/nvim-lua/plenary.nvim). `tests/minimal_init.lua` finds it under `stdpath("data")`; set `PLENARY_PATH` if yours lives elsewhere.
 
 ## License
 
