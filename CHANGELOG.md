@@ -1,0 +1,112 @@
+# Changelog
+
+All notable changes to this project are documented here. This project follows
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] — 2026-07-13
+
+First tagged release. Up to now the plugin has only been installable from
+`main`; from here on you can pin a version.
+
+If you are pinning for the first time, note the one breaking change below.
+
+### Breaking
+
+- **`sources` now merges with the defaults instead of replacing them.** The
+  option was always *documented* as defaulting to
+  `{ typescript = true, ts = true, vtsls = true }` and merged with your table,
+  but the default was actually `nil`, so your table silently replaced the whole
+  set. `setup({ sources = { deno = true } })` therefore stopped formatting
+  TypeScript diagnostics altogether.
+
+  It now behaves as documented, and `{ deno = true }` *adds* Deno. If you were
+  relying on the old behavior to **restrict** which sources get formatted, turn
+  the others off explicitly:
+
+  ```lua
+  -- before (accidentally worked as "only vtsls")
+  require("effect-error-pretty").setup({ sources = { vtsls = true } })
+
+  -- now
+  require("effect-error-pretty").setup({
+    sources = { vtsls = true, typescript = false, ts = false },
+  })
+  ```
+
+### Fixed — parser
+
+- **Effects with a function type in the `A` channel parsed into the wrong
+  channels.** The `>` in an arrow type (`(id: string) => Effect<...>`) was
+  counted as a closing bracket, driving the nesting depth negative so every
+  top-level comma after it was missed. `E` and `R` were swallowed into `A`, and
+  the headline "Missing Services" box never fired — on a service interface with
+  methods, which is the common case.
+- A top-level union of Effects (`Effect<A> | Effect<B>`, e.g. from
+  `cond ? effectA : effectB`) matched the greedy `Effect<...>` pattern and was
+  shredded into a fabricated service name. It now falls back to a plain type
+  mismatch.
+- `YieldWrap<...>` was unwrapped *before* `import("…").` prefixes were stripped,
+  so the fully-qualified form TypeScript actually emits never unwrapped.
+- **`Not callable` (TS2349) and nullish (TS18048) never fired at all.** The
+  clause they match lives on a continuation line that the parser stripped before
+  matching. Both are now read before the strip — while making sure a TS2769
+  *overload* error is not misreported as "not callable", since it nests the same
+  text.
+- `Object is possibly 'null' or 'undefined'` (TS2533) reported only the `null`
+  half, and the same bug applied to the named form (TS18049).
+- Argument-count errors only matched a plain count; the `at least N` (TS2555)
+  and `N-M` overload forms matched nothing and rendered no box.
+- `extra_patterns` given as a bare function now works instead of erroring on
+  every TypeScript diagnostic.
+
+### Fixed — rendering
+
+- A service whose name merely *starts with* `Scope` (e.g. `ScopeManager`) was
+  titled "Scope Required" over a contradicting `Effect.provide` hint. When
+  `Scope` genuinely rides along with other services, both hints are now shown.
+- When both sides normalized to the same signature — two copies of a package in
+  `node_modules` — the plugin rendered a "Mismatch" box whose Got and Expected
+  were character-for-character identical. That case is now named, with the
+  differing import paths kept visible.
+- **Inline text hid diverging channels.** For a multi-channel error the float
+  showed both the missing services and the unhandled errors, but the inline
+  virtual text showed only the services — so following it left the error
+  unresolved with no clue why. Every diverging channel is now reported.
+- Truncation was byte-wise and could cut a multi-byte character in half; the
+  ellipsis was decided from the pre-strip length, so short types got a `…` they
+  had not earned.
+- Wrapped types did not line up under their labels (the continuation indents
+  were hardcoded and measured against the wrong prefixes), so the output did not
+  match the screenshots in the README.
+- Five diagnostic kinds rendered a float box but returned nothing inline.
+
+### Fixed — API and setup
+
+- **A formatter error no longer takes down the whole diagnostic float.** There
+  was no `pcall` in the format path, so one throwing `extra_pattern` blanked the
+  entire float — including diagnostics from unrelated sources on the same line —
+  and threw on every `CursorHold`.
+- **`float = true` no longer gets silently wiped.** `vim.diagnostic.config()`
+  shallow-assigns top-level keys, so any later `config({ float = ... })`
+  replaced the whole table and dropped the formatter. LazyVim's `nvim-lspconfig`
+  spec does exactly this, on the same event the README's own install snippet
+  uses. The formatter now reinstalls itself on `VimEnter` / `LspAttach`.
+- A function-form `float` config (a documented Neovim shape) was discarded
+  wholesale, taking the user's border and their own `format` with it.
+- `inline_format` kept only the first line of `format-ts-errors`' deliberately
+  multi-line output, rendering the literal word `Type` as the virtual text.
+
+### Fixed — docs and tests
+
+- The documented test command loaded your personal Neovim config instead of
+  `tests/minimal_init.lua`: `PlenaryBustedDirectory` spawns a child process per
+  spec file, and those children ignore the parent's `-u`.
+- `format_ts_errors_fallback` linked to an npm package; the code requires the
+  Lua plugin
+  [`format-ts-errors.nvim`](https://github.com/davidosomething/format-ts-errors.nvim).
+- `tests/minimal_init.lua` hardcoded the XDG default path for plenary, so it
+  silently no-opped under `NVIM_APPNAME` or a custom `XDG_DATA_HOME`.
+- Test coverage went from 32 to 76 cases. `render.lua` and `init.lua` previously
+  had none at all, which is why most of the above shipped.
+
+[0.1.0]: https://github.com/rashedInt32/effect-error-pretty.nvim/releases/tag/v0.1.0

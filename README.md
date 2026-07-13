@@ -209,6 +209,7 @@ Requires Neovim 0.10+.
 ```lua
 {
   "rashedInt32/effect-error-pretty.nvim",
+  version = "*",           -- pin to tagged releases; drop this to track main
   event = { "BufReadPre", "BufNewFile" },
   opts = {
     float = true,          -- auto-patch vim.diagnostic.config.float.format
@@ -217,6 +218,8 @@ Requires Neovim 0.10+.
   },
 }
 ```
+
+See the [changelog](CHANGELOG.md) for what's in each release.
 
 ### Manual wiring
 
