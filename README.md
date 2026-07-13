@@ -259,6 +259,43 @@ If you want to see the plugin wired up end-to-end (float format, sign icons, spo
 
 <https://github.com/rashedInt32/lazyvim-config>
 
+## Gotchas
+
+The boxes are multi-line, and `vim.diagnostic` was built for one-line messages. Two float options will happily splice text onto a box and knock it off its own gutter — neither is something this plugin can defend against, so they're worth knowing.
+
+**`source = true` shifts the box's first line.** `open_float` runs your `format` function *first* and only *then* prepends the source, so the source lands on line 1 of the finished box and nothing else:
+
+```
+ts: ╭─ ⚠ Effect — Unhandled Errors    ← pushed right by #"ts: "
+│                                      ← the gutter below it is not
+```
+
+Set `source = false` and add it back yourself for the messages that aren't boxed:
+
+```lua
+format = function(diagnostic)
+  local rendered = require("effect-error-pretty").float_format(diagnostic)
+  if rendered then
+    return rendered                    -- a box speaks for itself
+  end
+  local src = diagnostic.source and (diagnostic.source .. ": ") or ""
+  return src .. diagnostic.message
+end,
+```
+
+**`suffix` lands after the closing `╰─`.** Same cause, other end. Suppress it when the message is already a box — note that by the time `suffix` runs, `format` has replaced `diagnostic.message` with the rendered box, so check that rather than re-running the formatter:
+
+```lua
+suffix = function(diagnostic)
+  if diagnostic.message:sub(1, #"╭") == "╭" then
+    return "", ""
+  end
+  return string.format(" [%s]", diagnostic.code or ""), "Comment"
+end,
+```
+
+**Opts passed to `open_float` beat your config.** If a keymap does `vim.diagnostic.open_float(nil, { source = "always" })`, that wins over `vim.diagnostic.config({ float = { source = false } })` and the prefix comes back — no matter how carefully the global config is set. Worth grepping for if a box looks misaligned even after the above.
+
 ## Options
 
 | Option                       | Default | Description                                                                                               |
