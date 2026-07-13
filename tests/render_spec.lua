@@ -1,5 +1,6 @@
 -- Renderer tests.  Run with plenary:
---   nvim --headless -u tests/minimal_init.lua -c "PlenaryBustedDirectory tests/" -c "qa!"
+--   nvim --headless -u tests/minimal_init.lua \
+--     -c "PlenaryBustedDirectory tests/ {minimal_init='tests/minimal_init.lua'}" -c "qa!"
 
 local render = require("effect-error-pretty.render")
 
@@ -48,7 +49,7 @@ describe("render.artistic — Effect", function()
 
   it("explains identical signatures instead of diffing a type against itself", function()
     local out = box(
-      'Type \'Effect<import("/app/node_modules/a/node_modules/effect/User").User, never, never>\' is not assignable to type \'Effect<import("/app/node_modules/effect/User").User, never, never>\'.'
+      "Type 'Effect<import(\"/app/node_modules/a/node_modules/effect/User\").User, never, never>' is not assignable to type 'Effect<import(\"/app/node_modules/effect/User\").User, never, never>'."
     )
     assert.is_truthy(out:find("Identical Signatures", 1, true))
     assert.is_truthy(out:find("two copies of the same package", 1, true))
@@ -93,7 +94,8 @@ describe("render.artistic — box alignment", function()
   end)
 
   it("aligns the tri-channel view (the ROut indent was three columns short)", function()
-    local out = box("Type 'Layer<" .. OBJ .. ", DbError, Database>' is not assignable to type 'Layer<void, never, never>'.")
+    local out =
+      box("Type 'Layer<" .. OBJ .. ", DbError, Database>' is not assignable to type 'Layer<void, never, never>'.")
     assert_first_continuation_aligns(out, "│     ROut:")
   end)
 end)
@@ -146,9 +148,8 @@ describe("render.short", function()
   end)
 
   it("does not append an ellipsis to a type that was never cut", function()
-    local out = line(
-      'Type \'import("/a/b/c/node_modules/@org/pkg/dist/types").ShortName\' is not assignable to type \'number\'.'
-    )
+    local out =
+      line("Type 'import(\"/a/b/c/node_modules/@org/pkg/dist/types\").ShortName' is not assignable to type 'number'.")
     assert.are.equal("✗ ShortName → ✓ number", out)
   end)
 
@@ -163,7 +164,8 @@ end)
 
 describe("hints agree with their titles", function()
   it("does not suggest Effect.scoped when Scope rides along with real services", function()
-    local out = box("Type 'Effect<void, never, Scope | Database>' is not assignable to type 'Effect<void, never, never>'.")
+    local out =
+      box("Type 'Effect<void, never, Scope | Database>' is not assignable to type 'Effect<void, never, never>'.")
     assert.is_truthy(out:find("Missing Services", 1, true))
     -- Provide handles Database; Scope still needs scoped. Both must be said.
     assert.is_truthy(out:find("Effect.provide", 1, true))
@@ -172,7 +174,7 @@ describe("hints agree with their titles", function()
 
   it("keeps the import paths visible in the identical-signatures box", function()
     local out = box(
-      'Type \'Effect<import("/app/node_modules/a/node_modules/effect/User").User, never, never>\' is not assignable to type \'Effect<import("/app/node_modules/effect/User").User, never, never>\'.'
+      "Type 'Effect<import(\"/app/node_modules/a/node_modules/effect/User\").User, never, never>' is not assignable to type 'Effect<import(\"/app/node_modules/effect/User\").User, never, never>'."
     )
     -- Prettifying these away would leave two lines that read identically.
     assert.is_truthy(out:find("a/node_modules/effect/User", 1, true))

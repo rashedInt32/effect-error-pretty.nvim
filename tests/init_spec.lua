@@ -1,5 +1,6 @@
 -- Public API / setup tests.  Run with plenary:
---   nvim --headless -u tests/minimal_init.lua -c "PlenaryBustedDirectory tests/" -c "qa!"
+--   nvim --headless -u tests/minimal_init.lua \
+--     -c "PlenaryBustedDirectory tests/ {minimal_init='tests/minimal_init.lua'}" -c "qa!"
 
 local pretty = require("effect-error-pretty")
 
@@ -83,10 +84,9 @@ describe("inline_format", function()
     if not pcall(require, "format-ts-errors") then
       return
     end
-    local out = pretty.inline_format(ts(
-      "Type '{ a: number; }' is missing the following properties from type 'Point': b, c",
-      2739
-    ))
+    local out = pretty.inline_format(
+      ts("Type '{ a: number; }' is missing the following properties from type 'Point': b, c", 2739)
+    )
     if out then
       assert.is_nil(out:find("\n", 1, true))
       assert.is_true(#out > #"Type")

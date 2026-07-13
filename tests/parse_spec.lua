@@ -1,7 +1,6 @@
 -- Unit tests for the parser.  Run with plenary:
---   :PlenaryBustedFile tests/parse_spec.lua
--- or from the shell:
---   nvim --headless -c "PlenaryBustedDirectory tests/" -c "qa!"
+--   nvim --headless -u tests/minimal_init.lua \
+--     -c "PlenaryBustedDirectory tests/ {minimal_init='tests/minimal_init.lua'}" -c "qa!"
 
 local parse = require("effect-error-pretty.parse")
 
@@ -247,7 +246,7 @@ describe("parse.parse — Effect patterns", function()
 
   it("unwraps YieldWrap even when TS qualifies it with an import path", function()
     local r = parse.parse(
-      'Type \'import("/p/node_modules/effect/Utils").YieldWrap<Effect<void, never, Database>>\' is not assignable to type \'import("/p/node_modules/effect/Utils").YieldWrap<Effect<void, never, never>>\'.'
+      "Type 'import(\"/p/node_modules/effect/Utils\").YieldWrap<Effect<void, never, Database>>' is not assignable to type 'import(\"/p/node_modules/effect/Utils\").YieldWrap<Effect<void, never, never>>'."
     )
     assert.are.equal("effect_mismatch", r.kind)
     assert.are.same({ "Database" }, r.missing_services)
@@ -255,7 +254,7 @@ describe("parse.parse — Effect patterns", function()
 
   it("reports diff_count 0 when both sides normalize to the same signature", function()
     local r = parse.parse(
-      'Type \'Effect<import("/app/node_modules/a/node_modules/effect/User").User, never, never>\' is not assignable to type \'Effect<import("/app/node_modules/effect/User").User, never, never>\'.'
+      "Type 'Effect<import(\"/app/node_modules/a/node_modules/effect/User\").User, never, never>' is not assignable to type 'Effect<import(\"/app/node_modules/effect/User\").User, never, never>'."
     )
     assert.are.equal("effect_mismatch", r.kind)
     assert.are.equal(0, r.diff_count)
