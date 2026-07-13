@@ -1,8 +1,8 @@
 # effect-error-pretty.nvim
 
-Effect-first TypeScript diagnostic formatter for Neovim. Turns walls of `Effect<A, E, R>` assignability errors into something you can actually read — with dedicated handling for the Effect ecosystem's pain points.
+An Effect-first TypeScript diagnostic formatter for Neovim. It takes those walls of `Effect<A, E, R>` assignability errors and turns them into something you can actually read, with dedicated handling for the Effect ecosystem's usual pain points.
 
-TypeScript errors in general also get the treatment, but Effect is the headline act.
+Regular TypeScript errors get the same treatment too, but Effect is the headline act.
 
 ## Why
 
@@ -12,9 +12,9 @@ When you're learning Effect, half the type errors look like this:
 Type 'Effect<void, DbError, Database | Logger>' is not assignable to type 'Effect<void, DbError, never>'.
 ```
 
-VSCode and Zed render that as one wrapped line in a tooltip. The actual information — "you forgot to provide `Database | Logger`" — is buried.
+VSCode and Zed render that as one wrapped line in a tooltip. The part you actually care about ("you forgot to provide `Database | Logger`") is buried in there somewhere.
 
-This plugin parses the error, figures out which channel (A, E, or R) actually diverged, and renders:
+This plugin parses the error, figures out which channel (A, E, or R) actually diverged, and renders this instead:
 
 ![Missing services box](assets/missing-services.png)
 
@@ -31,7 +31,7 @@ This plugin parses the error, figures out which channel (A, E, or R) actually di
 
 ## Preview
 
-More scenarios the plugin recognizes, shown as they render in the float.
+Here are more scenarios the plugin recognizes, shown as they render in the float.
 
 ### Unhandled errors (forgot `Effect.catchAll` / `catchTags` / `orDie`)
 
@@ -63,7 +63,7 @@ More scenarios the plugin recognizes, shown as they render in the float.
 
 ### Scope required
 
-`Scope` is detected specifically so the hint suggests `Effect.scoped` instead of a generic `Effect.provide`.
+`Scope` gets detected on its own, so the hint suggests `Effect.scoped` instead of a generic `Effect.provide`.
 
 ![Scope required box](assets/scope-required.png)
 
@@ -80,7 +80,7 @@ More scenarios the plugin recognizes, shown as they render in the float.
 
 ### Multi-channel diff
 
-When two or more channels diverge at once, the compact boxes step aside for a full tri-channel view with all annotations stacked at the bottom.
+When two or more channels diverge at once, the compact boxes step aside and you get a full tri-channel view with all the annotations stacked at the bottom.
 
 ```
 ╭─ ⊘ Effect Mismatch
@@ -100,7 +100,7 @@ When two or more channels diverge at once, the compact boxes step aside for a fu
 ╰─
 ```
 
-### Layer — ROut widening
+### Layer: ROut widening
 
 Layer mismatches get their own channel labels (`ROut / E / RIn`) and a `Layer.provide` / `Layer.merge` hint.
 
@@ -117,7 +117,7 @@ Layer mismatches get their own channel labels (`ROut / E / RIn`) and a `Layer.pr
 
 ### Stream mismatch
 
-Stream follows the same shape as Effect, with the header re-labeled so you see at a glance which constructor you're dealing with.
+Stream follows the same shape as Effect, but the header is relabeled so you can tell at a glance which constructor you're dealing with.
 
 ![Stream mismatch box](assets/stream-mismatch.png)
 
@@ -134,9 +134,9 @@ Stream follows the same shape as Effect, with the header re-labeled so you see a
 
 ### General TypeScript
 
-Everyday TS errors get the same treatment — not just the Effect ones. A few representative cases:
+Everyday TS errors get the same treatment, not just the Effect ones. A few representative cases:
 
-**Missing property** (TS2741) — long object types wrap at `;` boundaries so the shape stays scannable.
+**Missing property** (TS2741). Long object types wrap at `;` boundaries so the shape stays scannable.
 
 ![Missing property box](assets/ts-missing-property.png)
 
@@ -152,7 +152,7 @@ Everyday TS errors get the same treatment — not just the Effect ones. A few re
 ╰─
 ```
 
-**Unknown property** (TS2339 / TS2551) — the property name is lifted out of the raw message so the typo jumps at you.
+**Unknown property** (TS2339 / TS2551). The property name gets lifted out of the raw message so the typo jumps right at you.
 
 ![Unknown property box](assets/ts-unknown-property.png)
 
@@ -164,7 +164,7 @@ Everyday TS errors get the same treatment — not just the Effect ones. A few re
 ╰─
 ```
 
-**Type mismatch** (TS2322 / TS2345) — classic Got/Expected diff, with unions shown inline.
+**Type mismatch** (TS2322 / TS2345). The classic Got/Expected diff, with unions shown inline.
 
 ![Type mismatch box](assets/ts-type-mismatch.png)
 
@@ -179,16 +179,16 @@ Everyday TS errors get the same treatment — not just the Effect ones. A few re
 ## Features
 
 **Effect-specific**
-- `Effect<A, E, R>` / `Effect.Effect<A, E, R>` / `Stream<A, E, R>` / `Layer<ROut, E, RIn>` — all parsed, channel-labeled, and diffed
-- **Missing services** (forgot `Effect.provide`) — compact box naming the exact services
-- **Unhandled errors** (forgot `Effect.catchAll` / `catchTags` / `orDie`) — compact box listing the leftover `E` members
-- **Wrong success type** — compact box with Got/Expected for `A` (or `ROut` for Layer)
-- **Scope-required** — detects `Scope` in got.R and suggests `Effect.scoped`
-- **`Context.Tag<"Id", Service>` unwrapping** — shows just the service name in diffs
-- **`YieldWrap<...>` unwrapping** — Effect.gen yields render as plain Effect mismatches
-- **Short signatures** — `Effect<A>` and `Effect<A, E>` default missing params to `never`
-- **Multi-channel view** — falls back to a full tri-channel table when 2+ channels diverge
-- **Type signature at the bottom** of every compact box so you see the full `Effect<...>` context
+- `Effect<A, E, R>` / `Effect.Effect<A, E, R>` / `Stream<A, E, R>` / `Layer<ROut, E, RIn>` are all parsed, channel-labeled, and diffed
+- **Missing services** (forgot `Effect.provide`): a compact box naming the exact services
+- **Unhandled errors** (forgot `Effect.catchAll` / `catchTags` / `orDie`): a compact box listing the leftover `E` members
+- **Wrong success type**: a compact box with Got/Expected for `A` (or `ROut` for Layer)
+- **Scope-required**: detects `Scope` in got.R and suggests `Effect.scoped`
+- **`Context.Tag<"Id", Service>` unwrapping**: diffs show just the service name
+- **`YieldWrap<...>` unwrapping**: Effect.gen yields render as plain Effect mismatches
+- **Short signatures**: `Effect<A>` and `Effect<A, E>` default missing params to `never`
+- **Multi-channel view**: falls back to a full tri-channel table when 2+ channels diverge
+- **Type signature at the bottom** of every compact box so you always see the full `Effect<...>` context
 
 **General TypeScript**
 - Type mismatches (TS2322 / TS2345) with multi-line wrapping for big types
@@ -251,7 +251,7 @@ vim.diagnostic.config({
 
 ### Full working example
 
-If you want to see the plugin wired up end-to-end — including the float format, sign icons, spotlight highlights, and tiny-inline-diagnostic integration — see the LazyVim config it was developed against:
+If you want to see the plugin wired up end-to-end (float format, sign icons, spotlight highlights, and the tiny-inline-diagnostic integration), take a look at the LazyVim config it was developed against:
 
 <https://github.com/rashedInt32/lazyvim-config>
 
@@ -270,10 +270,10 @@ If you want to see the plugin wired up end-to-end — including the float format
 ```lua
 local pretty = require("effect-error-pretty")
 
--- Float box (multi-line) — returns nil if unhandled; caller should fall back.
+-- Float box (multi-line). Returns nil if unhandled; caller should fall back.
 pretty.float_format(diagnostic)
 
--- Inline one-line — returns nil if unhandled.
+-- Inline one-liner. Returns nil if unhandled.
 pretty.inline_format(diagnostic)
 
 -- Low-level: parse a raw TS diagnostic message into a structured kind.
@@ -283,7 +283,7 @@ require("effect-error-pretty.parse").parse(message, { effect = true })
 
 ## Extending
 
-Add a parser for a custom rule you care about:
+Want to catch a custom rule? Add your own parser:
 
 ```lua
 require("effect-error-pretty").setup({
@@ -298,7 +298,7 @@ require("effect-error-pretty").setup({
 })
 ```
 
-Render logic for custom `kind`s isn't wired in yet — for now, `parse()` returns the structured result and you render it yourself. If there's demand, we'll expose a renderer registry.
+Render logic for custom `kind`s isn't wired in yet. For now, `parse()` returns the structured result and you render it yourself. If there's demand, we'll expose a renderer registry.
 
 ## Tests
 
