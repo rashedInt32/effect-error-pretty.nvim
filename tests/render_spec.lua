@@ -67,6 +67,70 @@ describe("render.artistic — Effect", function()
   end)
 end)
 
+describe("render.artistic — @effect/language-service", function()
+  it("renders the Scope box without a signature diff it does not have", function()
+    local out = box("This Effect requires a service that is missing from the expected Effect context: `Scope`.")
+    assert.is_truthy(out:find("Scope Required", 1, true))
+    assert.is_truthy(out:find("Effect.scoped", 1, true))
+    assert.is_nil(out:find("Got:", 1, true))
+  end)
+
+  it("says provide, and scoped as well, when Scope rides along", function()
+    local out =
+      box("This Effect requires a service that is missing from the expected Effect context: `Database | Scope`.")
+    assert.is_truthy(out:find("Missing Services", 1, true))
+    assert.is_truthy(out:find("Forgot to provide: Database | Scope", 1, true))
+    assert.is_truthy(out:find("Effect.provide", 1, true))
+    assert.is_truthy(out:find("Effect.scoped", 1, true))
+  end)
+
+  it("titles the Layer context box as RIn and hints at Layer.provide", function()
+    local out = box("Missing 'Database' in the expected Layer context.")
+    assert.is_truthy(out:find("Missing RIn", 1, true))
+    assert.is_truthy(out:find("Layer.provide", 1, true))
+  end)
+
+  it("renders unhandled errors with the catchTags hint", function()
+    local out = box("Missing 'NetworkError' in the expected Effect errors.")
+    assert.is_truthy(out:find("Unhandled Errors", 1, true))
+    assert.is_truthy(out:find("Not in E channel: NetworkError", 1, true))
+    assert.is_truthy(out:find("Effect.catchTags", 1, true))
+  end)
+
+  it("closes every box it opens", function()
+    for _, msg in ipairs({
+      "This Effect requires a service that is missing from the expected Effect context: `Scope`.",
+      "Missing 'Database' in the expected Layer context.",
+      "Missing 'NetworkError' in the expected Effect errors.",
+    }) do
+      local out = box(msg)
+      assert.are.equal("╭", out:sub(1, #"╭"))
+      assert.is_truthy(out:find("╰─", 1, true))
+    end
+  end)
+end)
+
+describe("render — TS2769 overload errors", function()
+  local NO_OVERLOAD = table.concat({
+    "No overload matches this call.",
+    "  Overload 1 of 2, '(options?: { readonly teardown?: Teardown | undefined; } | undefined): <E, A>(effect: Effect<A, E, never>) => void', gave the following error.",
+    "    Type 'Effect<Fiber<never, never>, never, Scope>' has no properties in common with type '{ readonly teardown?: Teardown | undefined; }'.",
+    "  Overload 2 of 2, '(effect: Effect<Fiber<never, never>, never, never>, options?: undefined): void', gave the following error.",
+    "    Argument of type 'Effect<Fiber<never, never>, never, Scope>' is not assignable to parameter of type 'Effect<Fiber<never, never>, never, never>'.",
+    "      Type 'Scope' is not assignable to type 'never'.",
+  }, "\n")
+
+  it("boxes the buried Effect report", function()
+    local out = box(NO_OVERLOAD)
+    assert.is_truthy(out:find("Scope Required", 1, true))
+    assert.is_truthy(out:find("Effect.scoped", 1, true))
+  end)
+
+  it("gives the inline line the same verdict", function()
+    assert.are.equal("◈ Needs Effect.scoped", line(NO_OVERLOAD))
+  end)
+end)
+
 describe("render.artistic — box alignment", function()
   -- A wrapped type's continuation lines must begin in the same column as the
   -- content of the label that introduced them.  Each of these indents was

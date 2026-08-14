@@ -184,12 +184,58 @@ end
 
 -- Only a bare Scope counts.  A prefix match also catches services like
 -- ScopeManager, which then get a Scope title over an Effect.provide hint.
-local function is_scope_only(parsed)
-  if not parsed.scope_required or #parsed.missing_services ~= 1 then
+local function scope_only(parsed, services)
+  if not parsed.scope_required or #services ~= 1 then
     return false
   end
-  local svc = parsed.missing_services[1]
+  local svc = services[1]
   return svc == "Scope" or svc == "Scope.Scope"
+end
+
+local function is_scope_only(parsed)
+  return scope_only(parsed, parsed.missing_services)
+end
+
+-- The "you forgot to provide something" box, shared by the type-diff path
+-- (TS2345/TS2322) and @effect/language-service, which reports the same fact
+-- with no types to diff.  Returns the lines above the closing `╰─`.
+local function missing_services_lines(name, services, is_layer, only_scope, scope_required)
+  local title
+  if only_scope then
+    title = name .. " — Scope Required"
+  elseif is_layer then
+    title = name .. " — Missing RIn"
+  else
+    title = name .. " — Missing Services"
+  end
+
+  local lines = {
+    "╭─ ◈ " .. title,
+    "│",
+    "│  ◈ Forgot to provide: " .. table.concat(services, " | "),
+  }
+  if only_scope then
+    table.insert(lines, "│  ⚡ Hint: wrap in Effect.scoped(...) — Scope is required")
+  elseif is_layer then
+    table.insert(lines, "│  ⚡ Hint: compose with Layer.provide(...) or Layer.merge(...)")
+  else
+    table.insert(lines, "│  ⚡ Hint: .pipe(Effect.provide(SomeLayer))")
+    -- Scope rides along with real services: provide handles them, but Scope
+    -- still needs Effect.scoped, so don't leave that half unsaid.
+    if scope_required then
+      table.insert(lines, "│  ⚡ Hint: Scope also needs Effect.scoped(...)")
+    end
+  end
+  return lines
+end
+
+local function unhandled_errors_lines(name, errors)
+  return {
+    "╭─ ⚠ " .. name .. " — Unhandled Errors",
+    "│",
+    "│  ⚠ Not in E channel: " .. table.concat(errors, " | "),
+    "│  ⚡ Hint: .pipe(Effect.catchTags({...})) or Effect.orDie",
+  }
 end
 
 -- ── artistic (float) renderer ──────────────────────────────────────────────
@@ -234,39 +280,17 @@ local function render_effect_mismatch(parsed)
   -- Compact single-channel-diff mode.
   if parsed.diff_count == 1 then
     if #parsed.missing_services > 0 then
-      local title
-      if is_scope_only(parsed) then
-        title = name .. " — Scope Required"
-      elseif is_layer then
-        title = name .. " — Missing RIn"
-      else
-        title = name .. " — Missing Services"
-      end
-      table.insert(lines, "╭─ ◈ " .. title)
-      table.insert(lines, "│")
-      table.insert(lines, "│  ◈ Forgot to provide: " .. table.concat(parsed.missing_services, " | "))
-      if is_scope_only(parsed) then
-        table.insert(lines, "│  ⚡ Hint: wrap in Effect.scoped(...) — Scope is required")
-      elseif is_layer then
-        table.insert(lines, "│  ⚡ Hint: compose with Layer.provide(...) or Layer.merge(...)")
-      else
-        table.insert(lines, "│  ⚡ Hint: .pipe(Effect.provide(SomeLayer))")
-        -- Scope rides along with real services: provide handles them, but Scope
-        -- still needs Effect.scoped, so don't leave that half unsaid.
-        if parsed.scope_required then
-          table.insert(lines, "│  ⚡ Hint: Scope also needs Effect.scoped(...)")
-        end
-      end
+      vim.list_extend(
+        lines,
+        missing_services_lines(name, parsed.missing_services, is_layer, is_scope_only(parsed), parsed.scope_required)
+      )
       push_signatures()
       table.insert(lines, "╰─")
       return table.concat(lines, "\n")
     end
 
     if #parsed.unhandled_errors > 0 then
-      table.insert(lines, "╭─ ⚠ " .. name .. " — Unhandled Errors")
-      table.insert(lines, "│")
-      table.insert(lines, "│  ⚠ Not in E channel: " .. table.concat(parsed.unhandled_errors, " | "))
-      table.insert(lines, "│  ⚡ Hint: .pipe(Effect.catchTags({...})) or Effect.orDie")
+      vim.list_extend(lines, unhandled_errors_lines(name, parsed.unhandled_errors))
       push_signatures()
       table.insert(lines, "╰─")
       return table.concat(lines, "\n")
@@ -321,6 +345,21 @@ function M.artistic(diagnostic, opts)
 
   if parsed.kind == "effect_mismatch" then
     return render_effect_mismatch(parsed)
+  elseif parsed.kind == "missing_context" then
+    local name = display_name(parsed.tag)
+    lines = missing_services_lines(
+      name,
+      parsed.services,
+      parsed.tag == "layer",
+      scope_only(parsed, parsed.services),
+      parsed.scope_required
+    )
+    table.insert(lines, "╰─")
+    return table.concat(lines, "\n")
+  elseif parsed.kind == "missing_errors" then
+    lines = unhandled_errors_lines(display_name(parsed.tag), parsed.errors)
+    table.insert(lines, "╰─")
+    return table.concat(lines, "\n")
   elseif parsed.kind == "type_mismatch" then
     table.insert(lines, "╭─ ⊘ Type Mismatch")
     table.insert(lines, "│")
@@ -450,6 +489,13 @@ function M.short(diagnostic, opts)
       return "⊘ " .. display_name(parsed.tag) .. " mismatch"
     end
     return table.concat(segs, "  ")
+  elseif parsed.kind == "missing_context" then
+    if scope_only(parsed, parsed.services) then
+      return "◈ Needs Effect.scoped"
+    end
+    return "◈ Missing provide: " .. table.concat(parsed.services, " | ")
+  elseif parsed.kind == "missing_errors" then
+    return "⚠ Unhandled: " .. table.concat(parsed.errors, " | ")
   elseif parsed.kind == "type_mismatch" then
     local got = truncate((parsed.got:gsub("import%([^)]+%)%.", "")), 50)
     local expected = truncate((parsed.expected:gsub("import%([^)]+%)%.", "")), 50)

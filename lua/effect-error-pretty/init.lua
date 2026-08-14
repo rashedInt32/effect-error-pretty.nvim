@@ -11,7 +11,7 @@ M.is_ts_source = parse.is_ts_source
 
 ---@class EffectErrorPretty.Config
 ---@field effect? boolean          Enable Effect<A,E,R> / Stream / Layer parsing. Default: true.
----@field sources? table<string, boolean>  Diagnostic sources to format. Merged with the defaults ({ typescript, ts, vtsls }); set one to false to drop it.
+---@field sources? table<string, boolean>  Diagnostic sources to format. Merged with the defaults ({ typescript, ts, vtsls, effect }); set one to false to drop it.
 ---@field format_ts_errors_fallback? boolean  Use format-ts-errors when no pattern matches. Default: true.
 ---@field extra_patterns? (fun(msg: string): table|nil)[]  User-defined parsers, run after builtins.
 ---@field float? boolean           Patch vim.diagnostic.config({ float = { format } }) in setup. Default: false.
