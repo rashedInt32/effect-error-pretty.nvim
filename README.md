@@ -184,12 +184,14 @@ Everyday TS errors get the same treatment, not just the Effect ones. A few repre
 - **Unhandled errors** (forgot `Effect.catchAll` / `catchTags` / `orDie`): a compact box listing the leftover `E` members
 - **Wrong success type**: a compact box with Got/Expected for `A` (or `ROut` for Layer)
 - **Scope-required**: detects `Scope` in got.R and suggests `Effect.scoped`
+- **Uninferred channels**: `unknown` / `any` in `R` or `E` is not a service you can provide, so it gets its own box pointing at the widening rather than at `Effect.provide`
 - **`Context.Tag<"Id", Service>` unwrapping**: diffs show just the service name
 - **`YieldWrap<...>` unwrapping**: Effect.gen yields render as plain Effect mismatches
 - **Short signatures**: `Effect<A>` and `Effect<A, E>` default missing params to `never`
 - **Multi-channel view**: falls back to a full tri-channel table when 2+ channels diverge
 - **Identical signatures**: when both sides normalize to the same type, says so (and points at duplicate copies of a package) instead of printing a Got/Expected diff of a type against itself
 - **Type signature at the bottom** of every compact box so you always see the full `Effect<...>` context
+- **`@effect/language-service` diagnostics** (source `effect`): `missingEffectContext`, `missingEffectError` and the Layer-context report reach the same boxes, without any types to diff
 
 **General TypeScript**
 - Type mismatches (TS2322 / TS2345) with multi-line wrapping for big types
@@ -197,6 +199,7 @@ Everyday TS errors get the same treatment, not just the Effect ones. A few repre
 - Cannot find name / module / exported member (TS2304 / TS2307 / TS2305)
 - Implicit any (TS7006), Uninitialized variable (TS2454), Nullish (TS2531 / TS18048)
 - Argument count (TS2554 / TS2555, including the `at least N` and `N-M` forms), Const reassignment, Not callable (TS2349)
+- Overload errors (TS2769): the headline names no types, so the overload report beneath it is parsed instead — an `Effect` one in preference to a plain one
 - Deprecated symbol messages
 - Optional fallback to [`format-ts-errors.nvim`](https://github.com/davidosomething/format-ts-errors.nvim) when no pattern matches
 
@@ -302,7 +305,8 @@ end,
 |------------------------------|---------|-----------------------------------------------------------------------------------------------------------|
 | `effect`                     | `true`  | Recognize `Effect` / `Stream` / `Layer` mismatches as first-class.                                        |
 | `float`                      | `false` | Automatically patch `vim.diagnostic.config.float.format` on `setup()`.                                    |
-| `sources`                    | `{ typescript=true, ts=true, vtsls=true }` | Diagnostic sources this plugin handles. Exact match only. Merged with the defaults, so `{ deno = true }` *adds* Deno — pass `{ typescript = false }` to drop one. |
+| `width`                      | `70`    | Target box width in display cells. Capped to the current window at render time: Neovim wraps the float at the window width, and that wrap carries no gutter. |
+| `sources`                    | `{ typescript=true, ts=true, vtsls=true, effect=true }` | Diagnostic sources this plugin handles. Exact match only. Merged with the defaults, so `{ deno = true }` *adds* Deno — pass `{ typescript = false }` to drop one. `effect` is `@effect/language-service`. |
 | `format_ts_errors_fallback`  | `true`  | When no pattern matches, try [`format-ts-errors.nvim`](https://github.com/davidosomething/format-ts-errors.nvim) if installed. |
 | `extra_patterns`             | `nil`   | List of `function(msg) -> {kind, ...}` parsers run after builtins. Let you add custom shapes.              |
 

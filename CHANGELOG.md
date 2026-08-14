@@ -3,6 +3,41 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`@effect/language-service` diagnostics are formatted.** Its source is
+  `effect`, not `ts`, so every one of its reports used to fall straight through
+  to the raw message. `missingEffectContext`, `missingEffectError` and the
+  Layer-context report now reach the same boxes as the type-diff path — they
+  name the missing pieces outright, so there is nothing to diff. `effect` is in
+  the default `sources` set; pass `{ effect = false }` to opt out.
+
+### Fixed
+
+- **The box broke apart in a narrow window.** Neovim wraps a diagnostic float at
+  the width of the window the cursor is in — not the editor width, and not
+  `max_width` — and that wrap is a soft one, so the continuation carries no `│`.
+  A 70-cell box in a 48-column split came apart. The box now measures the window
+  at render time and shrinks to fit, hint lines included, and the type wrapper
+  breaks *before* the budget instead of at the first space past it. New `width`
+  option sets the target (default 70).
+- **"Forgot to provide: unknown" was a dead end.** `unknown` / `any` in a
+  channel is TypeScript reporting that it never resolved that channel — there is
+  no layer to provide. Those now get their own box ("R Not Inferred") pointing at
+  the widening instead of at `Effect.provide`. A real service alongside an
+  `unknown` keeps its provide hint and gains a note that providing it won't
+  clear the error on its own. Applies to `E` and to the language-service reports
+  the same way.
+- **Overload errors (TS2769) produced nothing.** The parser dropped everything
+  after the first line, and that line — "No overload matches this call." — names
+  no types. The overload report nested beneath it is now parsed instead,
+  preferring an `Effect`/`Stream`/`Layer` report over a plain one, and the
+  argument-level line over the narrowed comparison nested under it (which knows
+  only that `Scope` isn't `never`). A report with no usable line falls through
+  to the old behavior.
+
 ## [0.1.1] — 2026-07-13
 
 Layout fixes. No API or behavior changes; nothing to migrate.
