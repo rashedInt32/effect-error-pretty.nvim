@@ -15,6 +15,7 @@ M.is_ts_source = parse.is_ts_source
 ---@field format_ts_errors_fallback? boolean  Use format-ts-errors when no pattern matches. Default: true.
 ---@field extra_patterns? (fun(msg: string): table|nil)[]  User-defined parsers, run after builtins.
 ---@field float? boolean           Patch vim.diagnostic.config({ float = { format } }) in setup. Default: false.
+---@field width? integer           Target box width in display cells. Default: 70, capped to the current window so the float never soft-wraps a line out of its gutter.
 
 ---@type EffectErrorPretty.Config
 local defaults = {
@@ -23,6 +24,7 @@ local defaults = {
   format_ts_errors_fallback = true,
   extra_patterns = nil,
   float = false,
+  width = 70,
 }
 
 local state = { opts = vim.deepcopy(defaults) }
@@ -50,6 +52,7 @@ local function parse_opts()
   return {
     effect = state.opts.effect,
     extra_patterns = state.opts.extra_patterns,
+    width = state.opts.width,
   }
 end
 

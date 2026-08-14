@@ -14,6 +14,19 @@ local function line(message)
   return render.short({ message = message }, EFFECT)
 end
 
+-- Every line of a box has to open with a box character. A soft wrap by the
+-- float window is exactly what that check catches: the wrapped half has none.
+local function assert_gutters(out)
+  for idx, l in ipairs(vim.split(out, "\n")) do
+    local head = vim.fn.strcharpart(l, 0, 1)
+    local expected = idx == 1 and "╭" or "│"
+    if idx == #vim.split(out, "\n") then
+      expected = "╰"
+    end
+    assert.are.equal(expected, head, "line " .. idx .. " lost its gutter: " .. l)
+  end
+end
+
 describe("render.artistic — Effect", function()
   it("names the missing service when A holds a function type", function()
     -- Regression: the `>` of `=>` used to be counted as a closing bracket, so
@@ -64,6 +77,44 @@ describe("render.artistic — Effect", function()
     local first, cont = out:match("(│  Got:      )[^\n]*\n(│ +)%S")
     assert.is_truthy(first)
     assert.are.equal(vim.fn.strdisplaywidth(first), vim.fn.strdisplaywidth(cont))
+  end)
+end)
+
+describe("render.artistic — fitting the float", function()
+  -- Neovim wraps the float at the *window* width, and that wrap carries no
+  -- gutter. Every line the box emits has to fit, hints included.
+  local SCOPE_RIDES_ALONG =
+    "Type 'Effect<Fiber<never, never>, never, MonitorHub | Scope>' is not assignable to type 'Effect<Fiber<never, never>, never, never>'."
+
+  local function widths(out)
+    local max = 0
+    for _, l in ipairs(vim.split(out, "\n")) do
+      max = math.max(max, vim.fn.strdisplaywidth(l))
+    end
+    return max
+  end
+
+  it("keeps every line inside an explicit width", function()
+    local out = render.artistic({ message = SCOPE_RIDES_ALONG }, { effect = true, width = 46 })
+    assert.is_true(widths(out) <= 46, "a line overran 46 cells:\n" .. out)
+  end)
+
+  it("wraps a hint instead of overrunning by a cell", function()
+    -- "⚡ Hint: Scope also needs Effect.scoped(...)" is 47 cells: one over, and
+    -- one is enough to lose the gutter on the wrapped half.
+    local out = render.artistic({ message = SCOPE_RIDES_ALONG }, { effect = true, width = 46 })
+    assert.is_truthy(out:find("Effect.scoped", 1, true))
+    assert_gutters(out)
+  end)
+
+  it("still gutters every continuation at the narrowest width", function()
+    assert_gutters(render.artistic({ message = SCOPE_RIDES_ALONG }, { effect = true, width = 1 }))
+  end)
+
+  it("leaves the default width alone in a normal window", function()
+    local out = box(SCOPE_RIDES_ALONG)
+    assert.is_true(widths(out) <= 70)
+    assert.is_truthy(out:find("│  ⚡ Hint: Scope also needs Effect.scoped(...)", 1, true))
   end)
 end)
 

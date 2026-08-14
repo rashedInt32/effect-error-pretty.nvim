@@ -36,8 +36,23 @@ M.truncate = truncate
 -- cell normally but two under `set ambiwidth=double`, so never assume 1.
 local GUTTER = "│"
 
--- Target width of a rendered box line, gutter included.
-local BOX_WIDTH = 70
+-- Target width of a rendered box line, gutter included.  Resolved per render:
+-- Neovim wraps a diagnostic float at the width of the window the cursor is in
+-- (`wrap_at = nvim_win_get_width(0)` in vim.lsp.util), *not* at the editor
+-- width, and that wrap is a soft one — the continuation carries no `│`, so a
+-- line one cell too long visibly breaks the box.  In a narrow split the box has
+-- to shrink to match.
+local DEFAULT_BOX_WIDTH = 70
+local MIN_BOX_WIDTH = 30
+local BOX_WIDTH = DEFAULT_BOX_WIDTH
+
+local function resolve_box_width(opts)
+  local want = (opts and opts.width) or DEFAULT_BOX_WIDTH
+  -- Leave room for the border the float draws around these lines.
+  local ok, win_width = pcall(vim.api.nvim_win_get_width, 0)
+  local room = ok and (win_width - 4) or want
+  BOX_WIDTH = math.max(MIN_BOX_WIDTH, math.min(want, room))
+end
 
 -- Continuation lines sit directly under the first character of `prefix`, so
 -- wrapped types stay aligned with the label that introduces them.
@@ -73,8 +88,21 @@ local function format_type_multiline(type_str, indent)
   local lines = {}
   local brace_depth = 0
   local current = ""
+  -- Byte index of the last depth-0 space in `current`: the break that keeps the
+  -- line inside the budget.  Breaking at the space that *crosses* the budget
+  -- instead overshoots it, and one cell of overshoot costs the gutter.
+  local break_at = nil
   local function trim(s)
     return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+  end
+
+  local function split_at_last_space()
+    if not break_at or vim.fn.strdisplaywidth(current) <= max_line_len then
+      return
+    end
+    table.insert(lines, trim(current:sub(1, break_at)))
+    current = current:sub(break_at + 1)
+    break_at = nil
   end
 
   for i = 1, #type_str do
@@ -87,14 +115,15 @@ local function format_type_multiline(type_str, indent)
     end
     if char == ";" and brace_depth == 1 then
       table.insert(lines, trim(current))
-      current = ""
-    elseif char == " " and brace_depth == 0 and vim.fn.strdisplaywidth(current) >= max_line_len then
+      current, break_at = "", nil
+    elseif char == " " and brace_depth == 0 then
       -- Soft-wrap only outside braces.  Inside an object the `;` above is the
       -- semantic break; wrapping mid-member on a space just orphans the `};`.
-      table.insert(lines, trim(current))
-      current = ""
+      split_at_last_space()
+      break_at = #current
     end
   end
+  split_at_last_space()
   if #trim(current) > 0 then
     table.insert(lines, trim(current))
   end
@@ -137,6 +166,34 @@ local function push_wrapped(lines, prefix, value)
   for i = 2, #chunks do
     table.insert(lines, chunks[i])
   end
+end
+
+-- Greedy word wrap that breaks *before* the budget.  `push_wrapped` overshoots
+-- to the next space, which is fine for a type string but not for the hint and
+-- summary lines: one cell of overrun costs the gutter on the wrapped half.
+local function push_prose(lines, prefix, text)
+  local indent = indent_for(prefix)
+  local budget = math.max(10, BOX_WIDTH - vim.fn.strdisplaywidth(indent))
+  local first, current = true, nil
+
+  local function flush()
+    if current then
+      table.insert(lines, (first and prefix or indent) .. current)
+      first, current = false, nil
+    end
+  end
+
+  for word in text:gmatch("%S+") do
+    if not current then
+      current = word
+    elseif vim.fn.strdisplaywidth(current .. " " .. word) <= budget then
+      current = current .. " " .. word
+    else
+      flush()
+      current = word
+    end
+  end
+  flush()
 end
 
 -- Hard-wrap without prettifying.  `push_wrapped` runs prettify_type, which
@@ -218,14 +275,18 @@ M.is_uninferred = is_uninferred
 -- Why a channel came out `unknown`, and what to do about it.  Deliberately
 -- names no service: there isn't one to name.
 local function uninferred_lines(name, label, found)
-  return {
+  local lines = {
     "╭─ ⚠ " .. name .. " — " .. label .. " Not Inferred",
     "│",
-    "│  ⚠ " .. label .. " is `" .. found .. "`, which is not a service",
-    "│  ⚡ Hint: something upstream is untyped — an `any`, a missing",
-    "│     annotation, or a generic that never got inferred",
-    "│  ⚡ Hint: annotate the effect to find where " .. label .. " widened",
   }
+  push_prose(lines, "│  ⚠ ", label .. " is `" .. found .. "`, which is not a service")
+  push_prose(
+    lines,
+    "│  ⚡ Hint: ",
+    "something upstream is untyped — an `any`, a missing annotation, or a generic that never got inferred"
+  )
+  push_prose(lines, "│  ⚡ Hint: ", "annotate the effect to find where " .. label .. " widened")
+  return lines
 end
 
 -- The "you forgot to provide something" box, shared by the type-diff path
@@ -249,26 +310,23 @@ local function missing_services_lines(name, services, is_layer, only_scope, scop
     title = name .. " — Missing Services"
   end
 
-  local lines = {
-    "╭─ ◈ " .. title,
-    "│",
-    "│  ◈ Forgot to provide: " .. table.concat(real, " | "),
-  }
+  local lines = { "╭─ ◈ " .. title, "│" }
+  push_prose(lines, "│  ◈ Forgot to provide: ", table.concat(real, " | "))
   -- A real service alongside an `unknown` still deserves its provide hint, but
   -- providing it will not clear the error on its own.
   if #unresolved > 0 then
-    table.insert(lines, "│  ⚠ " .. label .. " also holds `" .. unresolved[1] .. "` — that half never inferred")
+    push_prose(lines, "│  ⚠ ", label .. " also holds `" .. unresolved[1] .. "` — that half never inferred")
   end
   if only_scope then
-    table.insert(lines, "│  ⚡ Hint: wrap in Effect.scoped(...) — Scope is required")
+    push_prose(lines, "│  ⚡ Hint: ", "wrap in Effect.scoped(...) — Scope is required")
   elseif is_layer then
-    table.insert(lines, "│  ⚡ Hint: compose with Layer.provide(...) or Layer.merge(...)")
+    push_prose(lines, "│  ⚡ Hint: ", "compose with Layer.provide(...) or Layer.merge(...)")
   else
-    table.insert(lines, "│  ⚡ Hint: .pipe(Effect.provide(SomeLayer))")
+    push_prose(lines, "│  ⚡ Hint: ", ".pipe(Effect.provide(SomeLayer))")
     -- Scope rides along with real services: provide handles them, but Scope
     -- still needs Effect.scoped, so don't leave that half unsaid.
     if scope_required then
-      table.insert(lines, "│  ⚡ Hint: Scope also needs Effect.scoped(...)")
+      push_prose(lines, "│  ⚡ Hint: ", "Scope also needs Effect.scoped(...)")
     end
   end
   return lines
@@ -280,14 +338,11 @@ local function unhandled_errors_lines(name, errors)
     return uninferred_lines(name, "E", unresolved[1])
   end
 
-  local lines = {
-    "╭─ ⚠ " .. name .. " — Unhandled Errors",
-    "│",
-    "│  ⚠ Not in E channel: " .. table.concat(real, " | "),
-    "│  ⚡ Hint: .pipe(Effect.catchTags({...})) or Effect.orDie",
-  }
+  local lines = { "╭─ ⚠ " .. name .. " — Unhandled Errors", "│" }
+  push_prose(lines, "│  ⚠ Not in E channel: ", table.concat(real, " | "))
+  push_prose(lines, "│  ⚡ Hint: ", ".pipe(Effect.catchTags({...})) or Effect.orDie")
   if #unresolved > 0 then
-    table.insert(lines, "│  ⚠ E also holds `" .. unresolved[1] .. "` — that half never inferred")
+    push_prose(lines, "│  ⚠ ", "E also holds `" .. unresolved[1] .. "` — that half never inferred")
   end
   return lines
 end
@@ -408,6 +463,7 @@ function M.artistic(diagnostic, opts)
   if not parsed then
     return nil
   end
+  resolve_box_width(opts)
 
   local lines = {}
 
