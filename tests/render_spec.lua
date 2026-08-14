@@ -67,6 +67,59 @@ describe("render.artistic — Effect", function()
   end)
 end)
 
+describe("render — channels that never inferred", function()
+  it("does not ask you to provide `unknown`", function()
+    -- TS prints `unknown` for a requirement it never resolved. There is no
+    -- layer to provide, so the provide hint would send you looking for one.
+    local out = box(
+      "Argument of type 'Effect<Fiber<never, unknown>, never, unknown>' is not assignable to parameter of type 'Effect<Fiber<never, unknown>, never, never>'."
+    )
+    assert.is_truthy(out:find("R Not Inferred", 1, true))
+    assert.is_nil(out:find("Forgot to provide", 1, true))
+    assert.is_nil(out:find("Effect.provide", 1, true))
+    assert.is_truthy(out:find("annotate the effect", 1, true))
+  end)
+
+  it("says the same inline", function()
+    local out = line(
+      "Argument of type 'Effect<Fiber<never, unknown>, never, unknown>' is not assignable to parameter of type 'Effect<Fiber<never, unknown>, never, never>'."
+    )
+    assert.are.equal("⚠ R never inferred (`unknown`)", out)
+  end)
+
+  it("treats `any` the same way", function()
+    local out = box("Type 'Effect<void, never, any>' is not assignable to type 'Effect<void, never, never>'.")
+    assert.is_truthy(out:find("R Not Inferred", 1, true))
+    assert.is_truthy(out:find("`any`", 1, true))
+  end)
+
+  it("labels the Layer channel RIn", function()
+    local out = box("Type 'Layer<Database, never, unknown>' is not assignable to type 'Layer<Database, never, never>'.")
+    assert.is_truthy(out:find("RIn Not Inferred", 1, true))
+  end)
+
+  it("keeps the provide hint when a real service rides along, and flags the rest", function()
+    local out =
+      box("Type 'Effect<void, never, Database | unknown>' is not assignable to type 'Effect<void, never, never>'.")
+    assert.is_truthy(out:find("Forgot to provide: Database", 1, true))
+    assert.is_nil(out:find("Forgot to provide: Database | unknown", 1, true))
+    assert.is_truthy(out:find("Effect.provide", 1, true))
+    assert.is_truthy(out:find("never inferred", 1, true))
+  end)
+
+  it("applies to the error channel too", function()
+    local out = box("Type 'Effect<void, unknown, never>' is not assignable to type 'Effect<void, never, never>'.")
+    assert.is_truthy(out:find("E Not Inferred", 1, true))
+    assert.is_nil(out:find("catchTags", 1, true))
+  end)
+
+  it("applies to the language-service report as well", function()
+    local out = box("This Effect requires a service that is missing from the expected Effect context: `unknown`.")
+    assert.is_truthy(out:find("R Not Inferred", 1, true))
+    assert.is_nil(out:find("Forgot to provide", 1, true))
+  end)
+end)
+
 describe("render.artistic — @effect/language-service", function()
   it("renders the Scope box without a signature diff it does not have", function()
     local out = box("This Effect requires a service that is missing from the expected Effect context: `Scope`.")

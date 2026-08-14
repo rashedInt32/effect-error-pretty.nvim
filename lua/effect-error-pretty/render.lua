@@ -196,10 +196,50 @@ local function is_scope_only(parsed)
   return scope_only(parsed, parsed.missing_services)
 end
 
+-- `unknown` / `any` is not a service you can provide: it is TypeScript saying
+-- it never resolved the channel at all.  "Forgot to provide: unknown" sends the
+-- reader hunting for a layer that does not exist, so these get their own box.
+local function is_uninferred(type_str)
+  return type_str == "unknown" or type_str == "any"
+end
+
+-- Split a channel's members into ones you can act on and ones that only mean
+-- "inference gave up here".
+local function partition_uninferred(members)
+  local real, unresolved = {}, {}
+  for _, m in ipairs(members) do
+    table.insert(is_uninferred(m) and unresolved or real, m)
+  end
+  return real, unresolved
+end
+
+M.is_uninferred = is_uninferred
+
+-- Why a channel came out `unknown`, and what to do about it.  Deliberately
+-- names no service: there isn't one to name.
+local function uninferred_lines(name, label, found)
+  return {
+    "╭─ ⚠ " .. name .. " — " .. label .. " Not Inferred",
+    "│",
+    "│  ⚠ " .. label .. " is `" .. found .. "`, which is not a service",
+    "│  ⚡ Hint: something upstream is untyped — an `any`, a missing",
+    "│     annotation, or a generic that never got inferred",
+    "│  ⚡ Hint: annotate the effect to find where " .. label .. " widened",
+  }
+end
+
 -- The "you forgot to provide something" box, shared by the type-diff path
 -- (TS2345/TS2322) and @effect/language-service, which reports the same fact
 -- with no types to diff.  Returns the lines above the closing `╰─`.
 local function missing_services_lines(name, services, is_layer, only_scope, scope_required)
+  local label = is_layer and "RIn" or "R"
+  local real, unresolved = partition_uninferred(services)
+
+  -- Nothing actionable in the channel: the whole box would be a lie.
+  if #real == 0 and #unresolved > 0 then
+    return uninferred_lines(name, label, unresolved[1])
+  end
+
   local title
   if only_scope then
     title = name .. " — Scope Required"
@@ -212,8 +252,13 @@ local function missing_services_lines(name, services, is_layer, only_scope, scop
   local lines = {
     "╭─ ◈ " .. title,
     "│",
-    "│  ◈ Forgot to provide: " .. table.concat(services, " | "),
+    "│  ◈ Forgot to provide: " .. table.concat(real, " | "),
   }
+  -- A real service alongside an `unknown` still deserves its provide hint, but
+  -- providing it will not clear the error on its own.
+  if #unresolved > 0 then
+    table.insert(lines, "│  ⚠ " .. label .. " also holds `" .. unresolved[1] .. "` — that half never inferred")
+  end
   if only_scope then
     table.insert(lines, "│  ⚡ Hint: wrap in Effect.scoped(...) — Scope is required")
   elseif is_layer then
@@ -230,12 +275,35 @@ local function missing_services_lines(name, services, is_layer, only_scope, scop
 end
 
 local function unhandled_errors_lines(name, errors)
-  return {
+  local real, unresolved = partition_uninferred(errors)
+  if #real == 0 and #unresolved > 0 then
+    return uninferred_lines(name, "E", unresolved[1])
+  end
+
+  local lines = {
     "╭─ ⚠ " .. name .. " — Unhandled Errors",
     "│",
-    "│  ⚠ Not in E channel: " .. table.concat(errors, " | "),
+    "│  ⚠ Not in E channel: " .. table.concat(real, " | "),
     "│  ⚡ Hint: .pipe(Effect.catchTags({...})) or Effect.orDie",
   }
+  if #unresolved > 0 then
+    table.insert(lines, "│  ⚠ E also holds `" .. unresolved[1] .. "` — that half never inferred")
+  end
+  return lines
+end
+
+-- Inline forms of the two boxes above.  Same rule: a channel that never
+-- inferred must not read as a service you could have provided.
+local function short_channel(label, members, provide_form)
+  local real, unresolved = partition_uninferred(members)
+  if #real == 0 and #unresolved > 0 then
+    return "⚠ " .. label .. " never inferred (`" .. unresolved[1] .. "`)"
+  end
+  local out = provide_form .. table.concat(real, " | ")
+  if #unresolved > 0 then
+    out = out .. "  ⚠ + `" .. unresolved[1] .. "`"
+  end
+  return out
 end
 
 -- ── artistic (float) renderer ──────────────────────────────────────────────
@@ -460,10 +528,10 @@ function M.short(diagnostic, opts)
         return "◈ Needs Effect.scoped"
       end
       if #parsed.missing_services > 0 then
-        return "◈ Missing provide: " .. table.concat(parsed.missing_services, " | ")
+        return short_channel(parsed.labels[3], parsed.missing_services, "◈ Missing provide: ")
       end
       if #parsed.unhandled_errors > 0 then
-        return "⚠ Unhandled: " .. table.concat(parsed.unhandled_errors, " | ")
+        return short_channel(parsed.labels[2], parsed.unhandled_errors, "⚠ Unhandled: ")
       end
       if parsed.success_differs then
         return a_diff()
@@ -473,12 +541,12 @@ function M.short(diagnostic, opts)
 
     local segs = {}
     if #parsed.missing_services > 0 then
-      table.insert(segs, "◈ Missing provide: " .. table.concat(parsed.missing_services, " | "))
+      table.insert(segs, short_channel(parsed.labels[3], parsed.missing_services, "◈ Missing provide: "))
     elseif parsed.got.R ~= parsed.expected.R then
       table.insert(segs, "◈ " .. parsed.labels[3] .. " differs")
     end
     if #parsed.unhandled_errors > 0 then
-      table.insert(segs, "⚠ Unhandled: " .. table.concat(parsed.unhandled_errors, " | "))
+      table.insert(segs, short_channel(parsed.labels[2], parsed.unhandled_errors, "⚠ Unhandled: "))
     elseif parsed.got.E ~= parsed.expected.E then
       table.insert(segs, "⚠ " .. parsed.labels[2] .. " differs")
     end
@@ -493,9 +561,9 @@ function M.short(diagnostic, opts)
     if scope_only(parsed, parsed.services) then
       return "◈ Needs Effect.scoped"
     end
-    return "◈ Missing provide: " .. table.concat(parsed.services, " | ")
+    return short_channel(parsed.tag == "layer" and "RIn" or "R", parsed.services, "◈ Missing provide: ")
   elseif parsed.kind == "missing_errors" then
-    return "⚠ Unhandled: " .. table.concat(parsed.errors, " | ")
+    return short_channel("E", parsed.errors, "⚠ Unhandled: ")
   elseif parsed.kind == "type_mismatch" then
     local got = truncate((parsed.got:gsub("import%([^)]+%)%.", "")), 50)
     local expected = truncate((parsed.expected:gsub("import%([^)]+%)%.", "")), 50)
