@@ -313,6 +313,102 @@ describe("parse.parse — patterns that only appear on continuation lines", func
   end)
 end)
 
+describe("parse.parse — nested overload reports (TS2769)", function()
+  -- The real thing, from `Effect.runFork(Effect.forkScoped(job))`: the headline
+  -- names no types at all and every one that matters is indented beneath it.
+  local NO_OVERLOAD = table.concat({
+    "No overload matches this call.",
+    "  Overload 1 of 2, '(options?: { readonly disableErrorReporting?: boolean | undefined; readonly teardown?: Teardown | undefined; } | undefined): <E, A>(effect: Effect<A, E, never>) => void', gave the following error.",
+    "    Type 'Effect<Fiber<never, never>, never, Scope>' has no properties in common with type '{ readonly disableErrorReporting?: boolean | undefined; readonly teardown?: Teardown | undefined; }'.",
+    "  Overload 2 of 2, '(effect: Effect<Fiber<never, never>, never, never>, options?: { readonly disableErrorReporting?: boolean | undefined; } | undefined): void', gave the following error.",
+    "    Argument of type 'Effect<Fiber<never, never>, never, Scope>' is not assignable to parameter of type 'Effect<Fiber<never, never>, never, never>'.",
+    "      Type 'Scope' is not assignable to type 'never'.",
+  }, "\n")
+
+  it("parses the overload's Effect report instead of the empty headline", function()
+    local r = parse.parse(NO_OVERLOAD)
+    assert.are.equal("effect_mismatch", r.kind)
+    assert.are.same({ "Scope" }, r.missing_services)
+    assert.is_true(r.scope_required)
+    assert.are.equal(1, r.diff_count)
+  end)
+
+  it("prefers the argument-level line over the narrowing nested under it", function()
+    -- "Type 'Scope' is not assignable to type 'never'" is also an assignability
+    -- sentence, and picking it would report a Scope → never type mismatch.
+    local r = parse.parse(NO_OVERLOAD)
+    assert.is_truthy(r.got.A:find("Fiber", 1, true))
+  end)
+
+  it("keeps a plain overload error when no side is an Effect", function()
+    local r = parse.parse(
+      "No overload matches this call.\n  Overload 1 of 2, '(x: string): void', gave the following error.\n    Argument of type 'number' is not assignable to parameter of type 'string'."
+    )
+    assert.are.equal("type_mismatch", r.kind)
+    assert.are.equal("number", r.got)
+    assert.are.equal("string", r.expected)
+  end)
+
+  it("does not read a sibling overload's detail as detail about the one it picked", function()
+    local r = parse.parse(table.concat({
+      "No overload matches this call.",
+      "  Overload 1 of 2, '(p: Point): void', gave the following error.",
+      "    Argument of type '{ x: number; }' is not assignable to parameter of type 'Point'.",
+      "  Overload 2 of 2, '(l: Line): void', gave the following error.",
+      "    Argument of type '{ x: number; }' is not assignable to parameter of type 'Line'.",
+      "      Property 'end' is missing in type '{ x: number; }' but required in type 'Line'.",
+    }, "\n"))
+    assert.are.equal("type_mismatch", r.kind)
+    assert.are.equal("Point", r.expected)
+    assert.is_nil(r.missing)
+  end)
+end)
+
+describe("parse.parse — @effect/language-service", function()
+  it("accepts the effect source", function()
+    assert.is_true(parse.is_ts_source("effect"))
+  end)
+
+  it("missingEffectContext names the service", function()
+    local r = parse.parse("This Effect requires a service that is missing from the expected Effect context: `Scope`.")
+    assert.are.equal("missing_context", r.kind)
+    assert.are.equal("effect", r.tag)
+    assert.are.same({ "Scope" }, r.services)
+    assert.is_true(r.scope_required)
+  end)
+
+  it("splits a multi-service context and flags Scope inside it", function()
+    local r = parse.parse(
+      "This Effect requires a service that is missing from the expected Effect context: `Database | Scope`."
+    )
+    assert.are.same({ "Database", "Scope" }, r.services)
+    assert.is_true(r.scope_required)
+  end)
+
+  it("still parses with the rule suffix attached", function()
+    -- Editors that don't lift `effect(rule)` into the code leave it on the
+    -- message; the capture must not be anchored to the end of the line.
+    local r = parse.parse(
+      "This Effect requires a service that is missing from the expected Effect context: `Scope`.    effect(missingEffectContext)"
+    )
+    assert.are.equal("missing_context", r.kind)
+    assert.are.same({ "Scope" }, r.services)
+  end)
+
+  it("reads the Layer context as a Layer, not an Effect", function()
+    local r = parse.parse("Missing 'Database' in the expected Layer context.")
+    assert.are.equal("missing_context", r.kind)
+    assert.are.equal("layer", r.tag)
+    assert.are.same({ "Database" }, r.services)
+  end)
+
+  it("missingEffectError lists the unhandled errors", function()
+    local r = parse.parse("Missing 'NetworkError | ParseError' in the expected Effect errors.")
+    assert.are.equal("missing_errors", r.kind)
+    assert.are.same({ "NetworkError", "ParseError" }, r.errors)
+  end)
+end)
+
 describe("parse.parse — extensibility", function()
   it("extra_patterns runs after builtins and wins on new shapes", function()
     local r = parse.parse("Custom lint: bad-foo at column 3", {

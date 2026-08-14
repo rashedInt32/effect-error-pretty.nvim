@@ -162,6 +162,56 @@ local function parse_effect_type(s)
 end
 M.parse_effect_type = parse_effect_type
 
+local function match_assignability(line)
+  local got, expected = line:match("Argument of type '(.+)' is not assignable to parameter of type '(.+)'%.?$")
+  if got then
+    return got, expected
+  end
+  return line:match("Type '(.+)' is not assignable to type '(.+)'%.?$")
+end
+
+-- TS2769's headline ("No overload matches this call.") names no types at all:
+-- one indented error per overload carries them.  Return the sub-report worth
+-- parsing — the chosen line plus the lines nested under it — or nil.
+--
+-- Two orderings decide "worth parsing".  An Effect/Stream/Layer pair beats a
+-- plain one, since that is the report the whole plugin exists to explain.  Then
+-- shallower beats deeper: TS nests the narrowed "Type 'Scope' is not assignable
+-- to type 'never'" *under* the argument-level line that still names both full
+-- types, and only the latter has enough to diff.
+local function pick_nested_report(msg)
+  local lines = {}
+  for line in msg:gmatch("[^\n]+") do
+    table.insert(lines, { indent = #line:match("^%s*"), body = trim(line) })
+  end
+
+  local best, best_score
+  for i = 2, #lines do
+    local got, expected = match_assignability(lines[i].body)
+    if got then
+      local g, e = parse_effect_type(got), parse_effect_type(expected)
+      local score = ((g and e and g.tag == e.tag) and 0 or 1000) + lines[i].indent
+      if not best_score or score < best_score then
+        best, best_score = i, score
+      end
+    end
+  end
+  if not best then
+    return nil
+  end
+
+  -- Stop at the next sibling: a Property/narrowing line under *another*
+  -- overload would otherwise be read as detail about the one we picked.
+  local report = { lines[best].body }
+  for i = best + 1, #lines do
+    if lines[i].indent <= lines[best].indent then
+      break
+    end
+    table.insert(report, lines[i].body)
+  end
+  return table.concat(report, "\n")
+end
+
 function M.has_scope(r)
   if not r then
     return false
@@ -196,12 +246,15 @@ end
 
 -- ── public API ────────────────────────────────────────────────────────────
 
--- Default set of diagnostic sources we treat as "TypeScript".  Tight,
--- exact-match set — extensible via setup({ sources = { ... } }).
+-- Default set of diagnostic sources we format.  Tight, exact-match set —
+-- extensible via setup({ sources = { ... } }).  `effect` is @effect/language-
+-- service, which reports missing services and unhandled errors under its own
+-- source rather than through tsserver.
 M.default_sources = {
   typescript = true,
   ts = true,
   vtsls = true,
+  effect = true,
 }
 
 function M.is_ts_source(source, allowed)
@@ -217,6 +270,23 @@ end
 function M.parse(msg, opts)
   opts = opts or {}
 
+  local headline = msg:match("^[^\n]*") or ""
+
+  -- A headline that carries no types of its own is a wrapper around nested
+  -- reports (TS2769).  Parse the best of those instead.  The recursion cannot
+  -- run away: the promoted report always leads with an assignability sentence,
+  -- which fails this guard.  A nil falls through, so the patterns below still
+  -- get their shot at the headline.
+  if not headline:find("is not assignable to", 1, true) then
+    local nested = pick_nested_report(msg)
+    if nested then
+      local nested_result = M.parse(nested, opts)
+      if nested_result then
+        return nested_result
+      end
+    end
+  end
+
   -- Capture details that live on a continuation line before we strip it.
   -- TS2741 puts "Property 'X' is missing" there, and TS2349 puts the only half
   -- that names the type ("Type 'X' has no call signatures").
@@ -226,7 +296,6 @@ function M.parse(msg, opts)
   -- appears on the next line.  TS2769 ("No overload matches this call") nests
   -- the same "has no call signatures" text under an overload report, so the
   -- headline has to agree before we claim the expression isn't callable.
-  local headline = msg:match("^[^\n]*") or ""
   local no_call_sigs = headline:match("is not callable") ~= nil and msg:match("has no call signatures") ~= nil
   local no_call_type = no_call_sigs and msg:match("Type '([^']+)' has no call signatures") or nil
 
@@ -279,6 +348,34 @@ function M.parse(msg, opts)
 
     local missing_prop = msg:match("Property '([^']+)' is missing") or missing_prop_full
     return { kind = "type_mismatch", got = got, expected = expected, missing = missing_prop }
+  end
+
+  -- @effect/language-service (source: "effect").  These name the missing pieces
+  -- outright, so they reach the same boxes with no types to diff.  Services and
+  -- errors arrive pre-joined with " | ".
+  local ctx = msg:match("missing from the expected Effect context: `(.-)`")
+  if ctx then
+    return {
+      kind = "missing_context",
+      tag = "effect",
+      services = split_union(ctx),
+      scope_required = M.has_scope(ctx),
+    }
+  end
+
+  local layer_ctx = msg:match("Missing '(.-)' in the expected Layer context")
+  if layer_ctx then
+    return {
+      kind = "missing_context",
+      tag = "layer",
+      services = split_union(layer_ctx),
+      scope_required = M.has_scope(layer_ctx),
+    }
+  end
+
+  local unhandled = msg:match("Missing '(.-)' in the expected Effect errors")
+  if unhandled then
+    return { kind = "missing_errors", tag = "effect", errors = split_union(unhandled) }
   end
 
   local prop, in_type, req_type = msg:match("Property '(.-)' is missing in type '(.-)' but required in type '(.-)'")
