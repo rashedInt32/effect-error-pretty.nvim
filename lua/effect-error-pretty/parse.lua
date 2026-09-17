@@ -162,7 +162,16 @@ local function parse_effect_type(s)
 end
 M.parse_effect_type = parse_effect_type
 
+-- TS appends advice *after* the assignability sentence, most commonly
+-- "… with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to
+-- the types of the target's properties."  Both patterns below are `$`-anchored,
+-- so that suffix hides the entire line.  M.parse already strips the same clause
+-- off the headline; the nested report lines need it too.  Without this an
+-- overload's argument-level line never becomes a candidate, and the narrowed
+-- consequence underneath it ("Type 'X' is not assignable to type 'never'") wins
+-- by default — reporting a bare type mismatch instead of the missing service.
 local function match_assignability(line)
+  line = line:gsub(" with '[^']+'.-$", "")
   local got, expected = line:match("Argument of type '(.+)' is not assignable to parameter of type '(.+)'%.?$")
   if got then
     return got, expected
@@ -171,45 +180,80 @@ local function match_assignability(line)
 end
 
 -- TS2769's headline ("No overload matches this call.") names no types at all:
--- one indented error per overload carries them.  Return the sub-report worth
--- parsing — the chosen line plus the lines nested under it — or nil.
+-- one indented error per overload carries them.  Enumerate every assignability
+-- line, each paired with the lines nested under it.
 --
--- Two orderings decide "worth parsing".  An Effect/Stream/Layer pair beats a
--- plain one, since that is the report the whole plugin exists to explain.  Then
--- shallower beats deeper: TS nests the narrowed "Type 'Scope' is not assignable
--- to type 'never'" *under* the argument-level line that still names both full
--- types, and only the latter has enough to diff.
-local function pick_nested_report(msg)
+-- Code owns this enumeration deliberately.  A selector may only choose one of
+-- these, so a wrong answer costs the wrong report and never a fabricated one.
+local function candidate_reports(msg)
   local lines = {}
   for line in msg:gmatch("[^\n]+") do
     table.insert(lines, { indent = #line:match("^%s*"), body = trim(line) })
   end
 
-  local best, best_score
+  local candidates = {}
   for i = 2, #lines do
     local got, expected = match_assignability(lines[i].body)
     if got then
-      local g, e = parse_effect_type(got), parse_effect_type(expected)
-      local score = ((g and e and g.tag == e.tag) and 0 or 1000) + lines[i].indent
-      if not best_score or score < best_score then
-        best, best_score = i, score
+      -- Stop at the next sibling: a Property/narrowing line under *another*
+      -- overload would otherwise be read as detail about the one we picked.
+      local report = { lines[i].body }
+      for j = i + 1, #lines do
+        if lines[j].indent <= lines[i].indent then
+          break
+        end
+        table.insert(report, lines[j].body)
       end
+      local g, e = parse_effect_type(got), parse_effect_type(expected)
+      table.insert(candidates, {
+        indent = lines[i].indent,
+        body = lines[i].body,
+        report = table.concat(report, "\n"),
+        effect_pair = (g ~= nil and e ~= nil and g.tag == e.tag),
+      })
     end
   end
-  if not best then
+  return candidates
+end
+M.candidate_reports = candidate_reports
+
+-- Two orderings decide "worth parsing".  An Effect/Stream/Layer pair beats a
+-- plain one, since that is the report the whole plugin exists to explain.  Then
+-- shallower beats deeper: TS nests the narrowed "Type 'Scope' is not assignable
+-- to type 'never'" *under* the argument-level line that still names both full
+-- types, and only the latter has enough to diff.
+local function heuristic_index(candidates)
+  local best, best_score
+  for i, candidate in ipairs(candidates) do
+    local score = (candidate.effect_pair and 0 or 1000) + candidate.indent
+    if not best_score or score < best_score then
+      best, best_score = i, score
+    end
+  end
+  return best
+end
+M.heuristic_index = heuristic_index
+
+-- Return the sub-report worth parsing, or nil.
+--
+-- `opts.pick_overload` may override the ordering above.  It returns an index
+-- into the candidate list; nil, a throw, or anything out of range keeps the
+-- heuristic, so the deterministic path stays the floor.
+local function pick_nested_report(msg, opts)
+  local candidates = candidate_reports(msg)
+  if #candidates == 0 then
     return nil
   end
 
-  -- Stop at the next sibling: a Property/narrowing line under *another*
-  -- overload would otherwise be read as detail about the one we picked.
-  local report = { lines[best].body }
-  for i = best + 1, #lines do
-    if lines[i].indent <= lines[best].indent then
-      break
+  local chosen
+  if opts and type(opts.pick_overload) == "function" then
+    local ok, index = pcall(opts.pick_overload, msg, candidates)
+    if ok and type(index) == "number" and candidates[index] then
+      chosen = index
     end
-    table.insert(report, lines[i].body)
   end
-  return table.concat(report, "\n")
+
+  return candidates[chosen or heuristic_index(candidates)].report
 end
 
 function M.has_scope(r)
@@ -278,7 +322,7 @@ function M.parse(msg, opts)
   -- which fails this guard.  A nil falls through, so the patterns below still
   -- get their shot at the headline.
   if not headline:find("is not assignable to", 1, true) then
-    local nested = pick_nested_report(msg)
+    local nested = pick_nested_report(msg, opts)
     if nested then
       local nested_result = M.parse(nested, opts)
       if nested_result then

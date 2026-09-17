@@ -362,6 +362,30 @@ describe("parse.parse — nested overload reports (TS2769)", function()
     assert.are.equal("Point", r.expected)
     assert.is_nil(r.missing)
   end)
+
+  -- Verbatim `tsc --pretty false` output under `exactOptionalPropertyTypes`.
+  -- TS tacks advice onto the end of the assignability sentence, which used to
+  -- hide the argument-level line from the candidate list entirely: the only
+  -- report left was the narrowed "Schema<any> -> never", so the box reported a
+  -- bare type mismatch instead of the service you forgot to provide.
+  local EXACT_OPTIONAL = table.concat({
+    "No overload matches this call.",
+    "  Overload 1 of 2, '(effect: Effect<number, never, never>): void', gave the following error.",
+    "    Argument of type 'Effect<number, never, Schema<any>>' is not assignable to parameter of type 'Effect<number, never, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.",
+    "      Type 'Schema<any>' is not assignable to type 'never'.",
+    "  Overload 2 of 2, '(opts: { readonly teardown?: boolean; }): void', gave the following error.",
+    "    Type 'Effect<number, never, Schema<any>>' has no properties in common with type '{ readonly teardown?: boolean; }'.",
+  }, "\n")
+
+  it("sees the argument-level line through a trailing compiler-advice clause", function()
+    local r = parse.parse(EXACT_OPTIONAL)
+    assert.are.equal("effect_mismatch", r.kind)
+    assert.are.same({ "Schema<any>" }, r.missing_services)
+  end)
+
+  it("keeps both overload reports as candidates under that clause", function()
+    assert.are.equal(2, #parse.candidate_reports(EXACT_OPTIONAL))
+  end)
 end)
 
 describe("parse.parse — @effect/language-service", function()
