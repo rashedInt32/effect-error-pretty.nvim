@@ -309,8 +309,47 @@ end,
 | `sources`                    | `{ typescript=true, ts=true, vtsls=true, effect=true }` | Diagnostic sources this plugin handles. Exact match only. Merged with the defaults, so `{ deno = true }` *adds* Deno — pass `{ typescript = false }` to drop one. `effect` is `@effect/language-service`. |
 | `format_ts_errors_fallback`  | `true`  | When no pattern matches, try [`format-ts-errors.nvim`](https://github.com/davidosomething/format-ts-errors.nvim) if installed. |
 | `extra_patterns`             | `nil`   | List of `function(msg) -> {kind, ...}` parsers run after builtins. Let you add custom shapes.              |
+| `typesafe`                   | `{ enabled = false }` | Optional [Jev](https://docs.typesafe.ai) enrichment for overload errors. Off by default. See below. |
 
 If `float = true` and something else later calls `vim.diagnostic.config({ float = ... })`, Neovim replaces the whole `float` table — the formatter reinstalls itself on `LspAttach`, so the ordering doesn't matter.
+
+## Jev enrichment (optional, off by default)
+
+A TS2769 "No overload matches this call." error carries one nested report per
+candidate overload, and only one of them describes the call you meant to write.
+The plugin picks with a hand-tuned heuristic: prefer an `Effect`/`Stream`/`Layer`
+pair, then prefer the shallower report. That is a guess, and on a heavily
+overloaded call like `Effect.gen` or a long `pipe` it can guess wrong.
+
+Enabling `typesafe` lets [Jev](https://docs.typesafe.ai) choose instead:
+
+```lua
+require("effect-error-pretty").setup({
+  float = true,
+  typesafe = {
+    enabled = true,
+    -- Defaults to $TYPESAFE_API_KEY. Prefer the env var over a literal here.
+    -- api_key = "...",
+    min_confidence = 0.6,
+  },
+})
+```
+
+Four things are worth knowing before you turn it on.
+
+- **Your diagnostics leave your machine.** The message text carries your own
+  service, error and type names. That is why this is opt-in and why there is no
+  default key.
+- **Nothing blocks.** `vim.diagnostic` calls the formatter synchronously, so the
+  deterministic box always renders first. The answer lands out of band and is
+  cached by message; the *next* hover on that diagnostic shows the enriched
+  pick. An `User EffectErrorPrettyEnriched` autocmd fires when one arrives, if
+  you want to redraw the float yourself.
+- **Code still owns the candidates.** The model only ever selects an index into
+  the reports the parser already enumerated, so it can pick the wrong report but
+  can never invent one or reword a type.
+- **The heuristic is the floor.** Below `min_confidence`, on a `none` answer, on
+  a timeout, or with no key, the existing behavior stands unchanged.
 
 ## Public API
 

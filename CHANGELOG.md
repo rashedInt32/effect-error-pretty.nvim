@@ -7,6 +7,18 @@ All notable changes to this project are documented here. This project follows
 
 ### Added
 
+- **Optional Jev enrichment for overload errors (`typesafe`).** TS2769 nests one
+  report per candidate overload, and the parser picked between them with a
+  hand-tuned score: Effect pair first, then shallower. On a heavily overloaded
+  call that guess is sometimes wrong. `setup({ typesafe = { enabled = true } })`
+  hands the choice to [Jev](https://docs.typesafe.ai) instead. The parser now
+  exposes `candidate_reports()` and takes a `pick_overload` selector, so the
+  model only ever chooses an index into reports the parser already found — it
+  cannot invent a report or reword a type. Off by default, requires
+  `$TYPESAFE_API_KEY`, and never blocks: the deterministic box renders first and
+  the cached answer shows on the next hover. Below `min_confidence`, on a
+  timeout, or with no key, the old heuristic stands unchanged.
+
 - **`@effect/language-service` diagnostics are formatted.** Its source is
   `effect`, not `ts`, so every one of its reports used to fall straight through
   to the raw message. `missingEffectContext`, `missingEffectError` and the
