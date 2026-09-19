@@ -3,6 +3,7 @@
 --   * short():    one-line output for inline virtual-text plugins.
 
 local parse = require("effect-error-pretty.parse")
+local hints = require("effect-error-pretty.hints")
 
 local M = {}
 
@@ -292,7 +293,7 @@ end
 -- The "you forgot to provide something" box, shared by the type-diff path
 -- (TS2345/TS2322) and @effect/language-service, which reports the same fact
 -- with no types to diff.  Returns the lines above the closing `╰─`.
-local function missing_services_lines(name, services, is_layer, only_scope, scope_required)
+local function missing_services_lines(name, services, is_layer, only_scope, scope_required, hint)
   local label = is_layer and "RIn" or "R"
   local real, unresolved = partition_uninferred(services)
 
@@ -322,7 +323,13 @@ local function missing_services_lines(name, services, is_layer, only_scope, scop
   elseif is_layer then
     push_prose(lines, "│  ⚡ Hint: ", "compose with Layer.provide(...) or Layer.merge(...)")
   else
-    push_prose(lines, "│  ⚡ Hint: ", ".pipe(Effect.provide(SomeLayer))")
+    -- A registered resolver may replace the generic provide hint with a
+    -- concrete one, or add a lean under it. Everything else is unchanged.
+    if hint then
+      vim.list_extend(lines, hints.lines(hint, ".pipe(Effect.provide(SomeLayer))"))
+    else
+      push_prose(lines, "│  ⚡ Hint: ", ".pipe(Effect.provide(SomeLayer))")
+    end
     -- Scope rides along with real services: provide handles them, but Scope
     -- still needs Effect.scoped, so don't leave that half unsaid.
     if scope_required then
@@ -332,7 +339,7 @@ local function missing_services_lines(name, services, is_layer, only_scope, scop
   return lines
 end
 
-local function unhandled_errors_lines(name, errors)
+local function unhandled_errors_lines(name, errors, hint)
   local real, unresolved = partition_uninferred(errors)
   if #real == 0 and #unresolved > 0 then
     return uninferred_lines(name, "E", unresolved[1])
@@ -340,7 +347,11 @@ local function unhandled_errors_lines(name, errors)
 
   local lines = { "╭─ ⚠ " .. name .. " — Unhandled Errors", "│" }
   push_prose(lines, "│  ⚠ Not in E channel: ", table.concat(real, " | "))
-  push_prose(lines, "│  ⚡ Hint: ", ".pipe(Effect.catchTags({...})) or Effect.orDie")
+  if hint then
+    vim.list_extend(lines, hints.lines(hint, ".pipe(Effect.catchTags({...})) or Effect.orDie"))
+  else
+    push_prose(lines, "│  ⚡ Hint: ", ".pipe(Effect.catchTags({...})) or Effect.orDie")
+  end
   if #unresolved > 0 then
     push_prose(lines, "│  ⚠ ", "E also holds `" .. unresolved[1] .. "` — that half never inferred")
   end
@@ -363,7 +374,7 @@ end
 
 -- ── artistic (float) renderer ──────────────────────────────────────────────
 
-local function render_effect_mismatch(parsed)
+local function render_effect_mismatch(parsed, hint)
   local g, e = parsed.got, parsed.expected
   local name = display_name(parsed.tag)
   local labels = parsed.labels
@@ -405,7 +416,7 @@ local function render_effect_mismatch(parsed)
     if #parsed.missing_services > 0 then
       vim.list_extend(
         lines,
-        missing_services_lines(name, parsed.missing_services, is_layer, is_scope_only(parsed), parsed.scope_required)
+        missing_services_lines(name, parsed.missing_services, is_layer, is_scope_only(parsed), parsed.scope_required, hint)
       )
       push_signatures()
       table.insert(lines, "╰─")
@@ -413,7 +424,7 @@ local function render_effect_mismatch(parsed)
     end
 
     if #parsed.unhandled_errors > 0 then
-      vim.list_extend(lines, unhandled_errors_lines(name, parsed.unhandled_errors))
+      vim.list_extend(lines, unhandled_errors_lines(name, parsed.unhandled_errors, hint))
       push_signatures()
       table.insert(lines, "╰─")
       return table.concat(lines, "\n")
@@ -465,10 +476,14 @@ function M.artistic(diagnostic, opts)
   end
   resolve_box_width(opts)
 
+  -- A registered resolver (see hints.lua) may hand back a concrete hint for
+  -- this diagnostic. nil keeps every box exactly as before.
+  local hint = hints.resolve(parsed, diagnostic)
+
   local lines = {}
 
   if parsed.kind == "effect_mismatch" then
-    return render_effect_mismatch(parsed)
+    return render_effect_mismatch(parsed, hint)
   elseif parsed.kind == "missing_context" then
     local name = display_name(parsed.tag)
     lines = missing_services_lines(
@@ -476,12 +491,13 @@ function M.artistic(diagnostic, opts)
       parsed.services,
       parsed.tag == "layer",
       scope_only(parsed, parsed.services),
-      parsed.scope_required
+      parsed.scope_required,
+      hint
     )
     table.insert(lines, "╰─")
     return table.concat(lines, "\n")
   elseif parsed.kind == "missing_errors" then
-    lines = unhandled_errors_lines(display_name(parsed.tag), parsed.errors)
+    lines = unhandled_errors_lines(display_name(parsed.tag), parsed.errors, hint)
     table.insert(lines, "╰─")
     return table.concat(lines, "\n")
   elseif parsed.kind == "type_mismatch" then

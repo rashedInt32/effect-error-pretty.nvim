@@ -3,12 +3,17 @@
 
 local parse = require("effect-error-pretty.parse")
 local render = require("effect-error-pretty.render")
-local typesafe = require("effect-error-pretty.typesafe")
+local hints = require("effect-error-pretty.hints")
 
 local M = {}
 
 M.parse = parse.parse
 M.is_ts_source = parse.is_ts_source
+-- Seams for an external judge (see hints.lua and jury.nvim).
+M.set_hint_resolver = hints.set_resolver
+M.set_overload_picker = hints.set_overload_picker
+M.hint_family = hints.family
+M.templates = hints.templates
 
 ---@class EffectErrorPretty.Config
 ---@field effect? boolean          Enable Effect<A,E,R> / Stream / Layer parsing. Default: true.
@@ -17,14 +22,7 @@ M.is_ts_source = parse.is_ts_source
 ---@field extra_patterns? (fun(msg: string): table|nil)[]  User-defined parsers, run after builtins.
 ---@field float? boolean           Patch vim.diagnostic.config({ float = { format } }) in setup. Default: false.
 ---@field width? integer           Target box width in display cells. Default: 70, capped to the current window so the float never soft-wraps a line out of its gutter.
----@field typesafe? EffectErrorPretty.TypeSafeConfig  Optional Jev enrichment. Off by default; sends diagnostic text to api.typesafe.ai.
-
----@class EffectErrorPretty.TypeSafeConfig
----@field enabled? boolean         Ask Jev which overload report to explain. Default: false.
----@field api_key? string          Defaults to $TYPESAFE_API_KEY.
----@field model? string            Default: "jev-latest".
----@field min_confidence? number   Below this, keep the deterministic heuristic. Default: 0.6.
----@field timeout_ms? integer      Default: 5000.
+---@field typesafe? table         Deprecated and ignored. Jev enrichment moved to jury.nvim, which registers itself through `hints.set_resolver` / `hints.set_overload_picker`.
 
 ---@type EffectErrorPretty.Config
 local defaults = {
@@ -34,7 +32,6 @@ local defaults = {
   extra_patterns = nil,
   float = false,
   width = 70,
-  typesafe = { enabled = false },
 }
 
 local state = { opts = vim.deepcopy(defaults) }
@@ -63,9 +60,9 @@ local function parse_opts()
     effect = state.opts.effect,
     extra_patterns = state.opts.extra_patterns,
     width = state.opts.width,
-    -- nil unless enrichment is switched on *and* keyed, so the parser keeps its
-    -- heuristic and stays entirely offline in the default configuration.
-    pick_overload = typesafe.available() and typesafe.pick_overload or nil,
+    -- nil unless something (jury.nvim) registered a picker, so the parser
+    -- keeps its heuristic and stays entirely offline by default.
+    pick_overload = hints.overload_picker(),
   }
 end
 
@@ -190,7 +187,12 @@ end
 ---@param opts? EffectErrorPretty.Config
 function M.setup(opts)
   state.opts = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
-  typesafe.setup(state.opts.typesafe)
+  if state.opts.typesafe ~= nil then
+    vim.schedule(function()
+      vim.notify("[effect-error-pretty] `typesafe` moved to jury.nvim; the option is ignored", vim.log.levels.WARN)
+    end)
+    state.opts.typesafe = nil
+  end
 
   if not state.opts.float then
     return
