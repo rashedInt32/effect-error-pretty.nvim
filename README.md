@@ -309,47 +309,47 @@ end,
 | `sources`                    | `{ typescript=true, ts=true, vtsls=true, effect=true }` | Diagnostic sources this plugin handles. Exact match only. Merged with the defaults, so `{ deno = true }` *adds* Deno — pass `{ typescript = false }` to drop one. `effect` is `@effect/language-service`. |
 | `format_ts_errors_fallback`  | `true`  | When no pattern matches, try [`format-ts-errors.nvim`](https://github.com/davidosomething/format-ts-errors.nvim) if installed. |
 | `extra_patterns`             | `nil`   | List of `function(msg) -> {kind, ...}` parsers run after builtins. Let you add custom shapes.              |
-| `typesafe`                   | `{ enabled = false }` | Optional [Jev](https://docs.typesafe.ai) enrichment for overload errors. Off by default. See below. |
+| `typesafe`                   | removed               | Jev enrichment moved to [jury.nvim](https://github.com/rashedInt32/jury.nvim). The option is ignored with a warning. See below. |
 
 If `float = true` and something else later calls `vim.diagnostic.config({ float = ... })`, Neovim replaces the whole `float` table — the formatter reinstalls itself on `LspAttach`, so the ordering doesn't matter.
 
-## Jev enrichment (optional, off by default)
+## Concrete hints with jury.nvim (optional)
 
-A TS2769 "No overload matches this call." error carries one nested report per
-candidate overload, and only one of them describes the call you meant to write.
-The plugin picks with a hand-tuned heuristic: prefer an `Effect`/`Stream`/`Layer`
-pair, then prefer the shallower report. That is a guess, and on a heavily
-overloaded call like `Effect.gen` or a long `pipe` it can guess wrong.
+Every `⚡ Hint:` line above is generic: `.pipe(Effect.provide(SomeLayer))`,
+`.pipe(Effect.catchTags({...})) or Effect.orDie`. The parser knows the family
+exactly, but not which layer you meant or which fix fits this function.
 
-Enabling `typesafe` lets [Jev](https://docs.typesafe.ai) choose instead:
+[jury.nvim](https://github.com/rashedInt32/jury.nvim) fills that in. It asks
+[Jev](https://docs.typesafe.ai) to pick among the layers and error classes
+found in your workspace and among a fixed set of fix shapes, then hands the
+pick back here to render through this plugin's own templates:
 
-```lua
-require("effect-error-pretty").setup({
-  float = true,
-  typesafe = {
-    enabled = true,
-    -- Defaults to $TYPESAFE_API_KEY. Prefer the env var over a literal here.
-    -- api_key = "...",
-    min_confidence = 0.6,
-  },
-})
+```
+│  ◈ Forgot to provide: Greeter | Database
+│  ⚡ Jev: .pipe(Effect.provide(AppLive))
+│     ↳ layer AppLive 0.99 · where here 0.60
 ```
 
-Four things are worth knowing before you turn it on.
+It also replaces the TS2769 overload heuristic when Jev is confident about
+which nested report you meant.
 
-- **Your diagnostics leave your machine.** The message text carries your own
-  service, error and type names. That is why this is opt-in and why there is no
-  default key.
-- **Nothing blocks.** `vim.diagnostic` calls the formatter synchronously, so the
-  deterministic box always renders first. The answer lands out of band and is
-  cached by message; the *next* hover on that diagnostic shows the enriched
-  pick. An `User EffectErrorPrettyEnriched` autocmd fires when one arrives, if
-  you want to redraw the float yourself.
-- **Code still owns the candidates.** The model only ever selects an index into
-  the reports the parser already enumerated, so it can pick the wrong report but
-  can never invent one or reword a type.
-- **The heuristic is the floor.** Below `min_confidence`, on a `none` answer, on
-  a timeout, or with no key, the existing behavior stands unchanged.
+Install both and it works. Install only this plugin and nothing changes:
+
+```lua
+{ "rashedInt32/effect-error-pretty.nvim", opts = { float = true } },
+{ "rashedInt32/jury.nvim", dependencies = { "rashedInt32/effect-error-pretty.nvim" }, opts = {} },
+```
+
+Three things to know.
+
+- **Nothing blocks.** jury judges in the background when diagnostics change
+  and caches by message plus enclosing function. The formatter only reads
+  that cache. A miss renders the generic hint; the next hover is concrete.
+- **Code still owns the candidates.** Jev selects a layer, an error class, a
+  fix shape, or a report index from lists this plugin or jury enumerated. It
+  never writes code or renames a type.
+- **This plugin stays offline on its own.** The seam is two registration
+  functions, below. No key, no network, no option to set here.
 
 ## Public API
 
@@ -365,6 +365,18 @@ pretty.inline_format(diagnostic)
 -- Low-level: parse a raw TS diagnostic message into a structured kind.
 -- Returns nil if no pattern matched.
 require("effect-error-pretty.parse").parse(message, { effect = true })
+
+-- Seams for an external judge (this is what jury.nvim registers into).
+-- The resolver runs inside vim.diagnostic's formatter: synchronous, fast.
+pretty.set_hint_resolver(function(parsed, family, names, diagnostic)
+  -- family is "services" or "errors"; return nil for the generic hint, or
+  -- { label = "Jev", line = "...", detail = "..." } to replace it, or
+  -- { lean = "..." } to keep it and add a line underneath.
+end)
+pretty.set_overload_picker(function(msg, candidates) return index_or_nil end)
+pretty.hint_family(parsed)                 -- "services"|"errors"|nil, names
+pretty.templates.provide(layer, names, where)
+pretty.templates.unhandled(fix, names, target)
 ```
 
 ## Extending
