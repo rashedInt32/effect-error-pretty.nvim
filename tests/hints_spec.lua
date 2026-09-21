@@ -5,19 +5,26 @@ local parse = require("effect-error-pretty.parse")
 local render = require("effect-error-pretty.render")
 local hints = require("effect-error-pretty.hints")
 
-local SUFFIX = " with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties."
-local MISSING = "Argument of type 'Effect<string, NotFound, Greeter | Database>' is not assignable to parameter of type 'Effect<string, NotFound, never>'" .. SUFFIX
-local UNHANDLED = "Type 'Effect<string, NotFound, Database>' is not assignable to type 'Effect<string, never, Database>'" .. SUFFIX
+local SUFFIX =
+  " with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties."
+local MISSING = "Argument of type 'Effect<string, NotFound, Greeter | Database>' is not assignable to parameter of type 'Effect<string, NotFound, never>'"
+  .. SUFFIX
+local UNHANDLED = "Type 'Effect<string, NotFound, Database>' is not assignable to type 'Effect<string, never, Database>'"
+  .. SUFFIX
 local LS_ERRORS = "Missing 'NotFound | Timeout' in the expected Effect errors."
 local LS_CTX = "This Effect requires a service that is missing from the expected Effect context: `Greeter`."
 local SCOPE = "Type 'Effect<string, never, Scope>' is not assignable to type 'Effect<string, never, never>'"
-local LAYER_RIN = "Type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, Database>' is not assignable to type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, never>'."
+local LAYER_RIN =
+  "Type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, Database>' is not assignable to type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, never>'."
 local LS_LAYER = "Missing 'Database' in the expected Layer context."
-local WIDE_R = "Argument of type 'Effect<string, never, unknown>' is not assignable to parameter of type 'Effect<string, never, never>'" .. SUFFIX
-local WIDE_E = "Type 'Effect<string, unknown, never>' is not assignable to type 'Effect<string, never, never>'" .. SUFFIX
+local WIDE_R = "Argument of type 'Effect<string, never, unknown>' is not assignable to parameter of type 'Effect<string, never, never>'"
+  .. SUFFIX
+local WIDE_E = "Type 'Effect<string, unknown, never>' is not assignable to type 'Effect<string, never, never>'"
+  .. SUFFIX
 local LS_WIDE_E = "Missing 'unknown' in the expected Effect errors."
 local LS_WIDE_RIN = "Missing 'any' in the expected Layer context."
-local MULTI = "Type 'Effect<string, NotFound, Database>' is not assignable to type 'Effect<number, never, never>'" .. SUFFIX
+local MULTI = "Type 'Effect<string, NotFound, Database>' is not assignable to type 'Effect<number, never, never>'"
+  .. SUFFIX
 
 local NO_OVERLOAD = table.concat({
   "No overload matches this call.",
@@ -96,17 +103,35 @@ describe("hints.templates", function()
   it("renders provide for each placement", function()
     assert.are.equal(".pipe(Effect.provide(AppLive))", hints.templates.provide("AppLive", { "Greeter" }, "here"))
     assert.are.equal(".pipe(Effect.provide(AppLive))", hints.templates.provide("AppLive", { "Greeter" }, nil))
-    assert.are.equal("keep Greeter | Database in R; provide AppLive higher up", hints.templates.provide("AppLive", { "Greeter", "Database" }, "caller"))
-    assert.are.equal("Layer.provide(LoggerLive) inside this layer", hints.templates.provide("LoggerLive", { "Logger" }, "layer"))
+    assert.are.equal(
+      "keep Greeter | Database in R; provide AppLive higher up",
+      hints.templates.provide("AppLive", { "Greeter", "Database" }, "caller")
+    )
+    assert.are.equal(
+      "Layer.provide(LoggerLive) inside this layer",
+      hints.templates.provide("LoggerLive", { "Logger" }, "layer")
+    )
   end)
 
   it("renders each unhandled-error fix", function()
     local t = hints.templates.unhandled
-    assert.are.equal('.pipe(Effect.catchTag("NotFound", () => Effect.succeed(fallback)))', t("catch_tag", { "NotFound" }))
-    assert.are.equal(".pipe(Effect.catchTags({ NotFound: () => Effect.succeed(fallback), Timeout: () => Effect.succeed(fallback) }))", t("catch_tag", { "NotFound", "Timeout" }))
+    assert.are.equal(
+      '.pipe(Effect.catchTag("NotFound", () => Effect.succeed(fallback)))',
+      t("catch_tag", { "NotFound" })
+    )
+    assert.are.equal(
+      ".pipe(Effect.catchTags({ NotFound: () => Effect.succeed(fallback), Timeout: () => Effect.succeed(fallback) }))",
+      t("catch_tag", { "NotFound", "Timeout" })
+    )
     assert.are.equal(".pipe(Effect.orDie)  — treat as a defect here", t("or_die", { "NotFound" }))
-    assert.are.equal("declare NotFound | Timeout in this function's E channel; let the caller handle it", t("declare", { "NotFound", "Timeout" }))
-    assert.are.equal(".pipe(Effect.mapError((e) => new UserServiceError({ cause: e })))", t("map_error", { "NotFound" }, "UserServiceError"))
+    assert.are.equal(
+      "declare NotFound | Timeout in this function's E channel; let the caller handle it",
+      t("declare", { "NotFound", "Timeout" })
+    )
+    assert.are.equal(
+      ".pipe(Effect.mapError((e) => new UserServiceError({ cause: e })))",
+      t("map_error", { "NotFound" }, "UserServiceError")
+    )
     assert.are.equal(".pipe(Effect.mapError((e) => new DomainError({ cause: e })))", t("map_error", { "NotFound" }))
     assert.is_nil(t("nope", { "NotFound" }))
   end)
@@ -140,7 +165,11 @@ describe("hints resolver seam", function()
     hints.set_resolver(function(parsed, family, names)
       assert.are.equal("services", family)
       assert.are.equal("layer", parsed.tag)
-      return { label = "Jev", line = hints.templates.provide("DatabaseLive", names, "layer"), detail = "layer DatabaseLive 0.93" }
+      return {
+        label = "Jev",
+        line = hints.templates.provide("DatabaseLive", names, "layer"),
+        detail = "layer DatabaseLive 0.93",
+      }
     end)
     for _, case in ipairs({ { LAYER_RIN, "typescript" }, { LS_LAYER, "effect" } }) do
       local box = render.artistic(diag(case[1], case[2]), { effect = true })
@@ -160,7 +189,11 @@ describe("hints resolver seam", function()
   it("lets the resolver name where a widened channel lost its type", function()
     hints.set_resolver(function(_, family, names)
       assert.are.equal("widened", family)
-      return { label = "Jev", line = hints.templates.widened(names[1], "fromRegistry", "app.ts", 12), detail = "widened fromRegistry 0.81" }
+      return {
+        label = "Jev",
+        line = hints.templates.widened(names[1], "fromRegistry", "app.ts", 12),
+        detail = "widened fromRegistry 0.81",
+      }
     end)
     local box = render.artistic(diag(WIDE_R), { effect = true })
     assert.is_truthy(box:find("R Not Inferred", 1, true))
@@ -240,7 +273,20 @@ describe("overload picker seam", function()
   end)
 
   it("ignores nil, out-of-range, non-numeric and throwing pickers", function()
-    for _, bad in ipairs({ function() return nil end, function() return 99 end, function() return "2" end, function() error("boom") end }) do
+    for _, bad in ipairs({
+      function()
+        return nil
+      end,
+      function()
+        return 99
+      end,
+      function()
+        return "2"
+      end,
+      function()
+        error("boom")
+      end,
+    }) do
       local r = parse.parse(NO_OVERLOAD, { pick_overload = bad })
       assert.are.equal("effect_mismatch", r.kind)
     end

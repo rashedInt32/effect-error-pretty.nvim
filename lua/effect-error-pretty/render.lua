@@ -428,7 +428,14 @@ local function render_effect_mismatch(parsed, hint)
     if #parsed.missing_services > 0 then
       vim.list_extend(
         lines,
-        missing_services_lines(name, parsed.missing_services, is_layer, is_scope_only(parsed), parsed.scope_required, hint)
+        missing_services_lines(
+          name,
+          parsed.missing_services,
+          is_layer,
+          is_scope_only(parsed),
+          parsed.scope_required,
+          hint
+        )
       )
       push_signatures()
       table.insert(lines, "╰─")
