@@ -321,7 +321,13 @@ local function missing_services_lines(name, services, is_layer, only_scope, scop
   if only_scope then
     push_prose(lines, "│  ⚡ Hint: ", "wrap in Effect.scoped(...) — Scope is required")
   elseif is_layer then
-    push_prose(lines, "│  ⚡ Hint: ", "compose with Layer.provide(...) or Layer.merge(...)")
+    -- Same seam as the effect branch: a resolver may name the layer to
+    -- compose in, or add a lean under the generic line.
+    if hint then
+      vim.list_extend(lines, hints.lines(hint, "compose with Layer.provide(...) or Layer.merge(...)"))
+    else
+      push_prose(lines, "│  ⚡ Hint: ", "compose with Layer.provide(...) or Layer.merge(...)")
+    end
   else
     -- A registered resolver may replace the generic provide hint with a
     -- concrete one, or add a lean under it. Everything else is unchanged.

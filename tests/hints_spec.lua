@@ -11,6 +11,8 @@ local UNHANDLED = "Type 'Effect<string, NotFound, Database>' is not assignable t
 local LS_ERRORS = "Missing 'NotFound | Timeout' in the expected Effect errors."
 local LS_CTX = "This Effect requires a service that is missing from the expected Effect context: `Greeter`."
 local SCOPE = "Type 'Effect<string, never, Scope>' is not assignable to type 'Effect<string, never, never>'"
+local LAYER_RIN = "Type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, Database>' is not assignable to type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, never>'."
+local LS_LAYER = "Missing 'Database' in the expected Layer context."
 
 local NO_OVERLOAD = table.concat({
   "No overload matches this call.",
@@ -42,6 +44,19 @@ describe("hints.family", function()
     f, names = hints.family(parse.parse(LS_ERRORS))
     assert.are.equal("errors", f)
     assert.are.same({ "NotFound", "Timeout" }, names)
+  end)
+
+  it("classifies a Layer's missing RIn as services and marks the tag", function()
+    local parsed = parse.parse(LAYER_RIN)
+    local f, names = hints.family(parsed)
+    assert.are.equal("services", f)
+    assert.are.same({ "Database" }, names)
+    assert.are.equal("layer", parsed.tag)
+    parsed = parse.parse(LS_LAYER)
+    f, names = hints.family(parsed)
+    assert.are.equal("services", f)
+    assert.are.same({ "Database" }, names)
+    assert.are.equal("layer", parsed.tag)
   end)
 
   it("leaves scope-only results alone", function()
@@ -93,6 +108,27 @@ describe("hints resolver seam", function()
     assert.is_truthy(box:find("⚡ Jev: .pipe(Effect.provide(AppLive))", 1, true))
     assert.is_truthy(box:find("↳ layer AppLive 0.99", 1, true))
     assert.is_falsy(box:find("SomeLayer", 1, true))
+  end)
+
+  it("honors the resolver in the Layer RIn box, from a type diff and from the language service", function()
+    hints.set_resolver(function(parsed, family, names)
+      assert.are.equal("services", family)
+      assert.are.equal("layer", parsed.tag)
+      return { label = "Jev", line = hints.templates.provide("DatabaseLive", names, "layer"), detail = "layer DatabaseLive 0.93" }
+    end)
+    for _, case in ipairs({ { LAYER_RIN, "typescript" }, { LS_LAYER, "effect" } }) do
+      local box = render.artistic(diag(case[1], case[2]), { effect = true })
+      assert.is_truthy(box:find("Missing RIn", 1, true))
+      assert.is_truthy(box:find("⚡ Jev: Layer.provide(DatabaseLive) inside this layer", 1, true))
+      assert.is_truthy(box:find("↳ layer DatabaseLive 0.93", 1, true))
+      assert.is_falsy(box:find("Layer.merge", 1, true))
+    end
+    hints.set_resolver(function()
+      return { lean = "jev unsure: layer none 0.40" }
+    end)
+    local box = render.artistic(diag(LAYER_RIN), { effect = true })
+    assert.is_truthy(box:find("⚡ Hint: compose with Layer.provide(...) or Layer.merge(...)", 1, true))
+    assert.is_truthy(box:find("↳ jev unsure: layer none 0.40", 1, true))
   end)
 
   it("keeps the generic line and adds a lean when the resolver is unsure", function()

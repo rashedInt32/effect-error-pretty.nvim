@@ -12,7 +12,9 @@ local M = {}
 
 --- Which hint family a parsed result belongs to, and the names involved.
 --- Only families with a concrete fix shape are returned. Scope-only results
---- are excluded on purpose: `Effect.scoped` needs no judgment.
+--- are excluded on purpose: `Effect.scoped` needs no judgment. A Layer's
+--- missing RIn is "services" too; `parsed.tag == "layer"` tells the
+--- resolver that the fix is Layer.provide inside the layer, not a pipe.
 ---@param parsed table  result of parse.parse
 ---@return "services"|"errors"|nil family, string[]|nil names
 function M.family(parsed)
@@ -26,7 +28,7 @@ function M.family(parsed)
     if parsed.unhandled_errors and #parsed.unhandled_errors > 0 then
       return "errors", parsed.unhandled_errors
     end
-  elseif parsed.kind == "missing_context" and parsed.tag == "effect" and not parsed.scope_required then
+  elseif parsed.kind == "missing_context" and not parsed.scope_required then
     return "services", parsed.services
   elseif parsed.kind == "missing_errors" then
     return "errors", parsed.errors
