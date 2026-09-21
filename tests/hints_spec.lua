@@ -11,6 +11,13 @@ local UNHANDLED = "Type 'Effect<string, NotFound, Database>' is not assignable t
 local LS_ERRORS = "Missing 'NotFound | Timeout' in the expected Effect errors."
 local LS_CTX = "This Effect requires a service that is missing from the expected Effect context: `Greeter`."
 local SCOPE = "Type 'Effect<string, never, Scope>' is not assignable to type 'Effect<string, never, never>'"
+local LAYER_RIN = "Type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, Database>' is not assignable to type 'Layer<{ readonly get: (id: string) => Effect<User, DbError, never>; }, never, never>'."
+local LS_LAYER = "Missing 'Database' in the expected Layer context."
+local WIDE_R = "Argument of type 'Effect<string, never, unknown>' is not assignable to parameter of type 'Effect<string, never, never>'" .. SUFFIX
+local WIDE_E = "Type 'Effect<string, unknown, never>' is not assignable to type 'Effect<string, never, never>'" .. SUFFIX
+local LS_WIDE_E = "Missing 'unknown' in the expected Effect errors."
+local LS_WIDE_RIN = "Missing 'any' in the expected Layer context."
+local MULTI = "Type 'Effect<string, NotFound, Database>' is not assignable to type 'Effect<number, never, never>'" .. SUFFIX
 
 local NO_OVERLOAD = table.concat({
   "No overload matches this call.",
@@ -42,6 +49,40 @@ describe("hints.family", function()
     f, names = hints.family(parse.parse(LS_ERRORS))
     assert.are.equal("errors", f)
     assert.are.same({ "NotFound", "Timeout" }, names)
+  end)
+
+  it("classifies a Layer's missing RIn as services and marks the tag", function()
+    local parsed = parse.parse(LAYER_RIN)
+    local f, names = hints.family(parsed)
+    assert.are.equal("services", f)
+    assert.are.same({ "Database" }, names)
+    assert.are.equal("layer", parsed.tag)
+    parsed = parse.parse(LS_LAYER)
+    f, names = hints.family(parsed)
+    assert.are.equal("services", f)
+    assert.are.same({ "Database" }, names)
+    assert.are.equal("layer", parsed.tag)
+  end)
+
+  it("classifies a channel that is only unknown/any as widened, named by its label", function()
+    local f, names = hints.family(parse.parse(WIDE_R))
+    assert.are.equal("widened", f)
+    assert.are.same({ "R" }, names)
+    f, names = hints.family(parse.parse(WIDE_E))
+    assert.are.equal("widened", f)
+    assert.are.same({ "E" }, names)
+    f, names = hints.family(parse.parse(LS_WIDE_E))
+    assert.are.equal("widened", f)
+    assert.are.same({ "E" }, names)
+    f, names = hints.family(parse.parse(LS_WIDE_RIN))
+    assert.are.equal("widened", f)
+    assert.are.same({ "RIn" }, names)
+  end)
+
+  it("asks nothing when more than one channel differs", function()
+    local parsed = parse.parse(MULTI)
+    assert.is_true(parsed.diff_count > 1)
+    assert.is_nil(hints.family(parsed))
   end)
 
   it("leaves scope-only results alone", function()
@@ -93,6 +134,48 @@ describe("hints resolver seam", function()
     assert.is_truthy(box:find("⚡ Jev: .pipe(Effect.provide(AppLive))", 1, true))
     assert.is_truthy(box:find("↳ layer AppLive 0.99", 1, true))
     assert.is_falsy(box:find("SomeLayer", 1, true))
+  end)
+
+  it("honors the resolver in the Layer RIn box, from a type diff and from the language service", function()
+    hints.set_resolver(function(parsed, family, names)
+      assert.are.equal("services", family)
+      assert.are.equal("layer", parsed.tag)
+      return { label = "Jev", line = hints.templates.provide("DatabaseLive", names, "layer"), detail = "layer DatabaseLive 0.93" }
+    end)
+    for _, case in ipairs({ { LAYER_RIN, "typescript" }, { LS_LAYER, "effect" } }) do
+      local box = render.artistic(diag(case[1], case[2]), { effect = true })
+      assert.is_truthy(box:find("Missing RIn", 1, true))
+      assert.is_truthy(box:find("⚡ Jev: Layer.provide(DatabaseLive) inside this layer", 1, true))
+      assert.is_truthy(box:find("↳ layer DatabaseLive 0.93", 1, true))
+      assert.is_falsy(box:find("Layer.merge", 1, true))
+    end
+    hints.set_resolver(function()
+      return { lean = "jev unsure: layer none 0.40" }
+    end)
+    local box = render.artistic(diag(LAYER_RIN), { effect = true })
+    assert.is_truthy(box:find("⚡ Hint: compose with Layer.provide(...) or Layer.merge(...)", 1, true))
+    assert.is_truthy(box:find("↳ jev unsure: layer none 0.40", 1, true))
+  end)
+
+  it("lets the resolver name where a widened channel lost its type", function()
+    hints.set_resolver(function(_, family, names)
+      assert.are.equal("widened", family)
+      return { label = "Jev", line = hints.templates.widened(names[1], "fromRegistry", "app.ts", 12), detail = "widened fromRegistry 0.81" }
+    end)
+    local box = render.artistic(diag(WIDE_R), { effect = true })
+    assert.is_truthy(box:find("R Not Inferred", 1, true))
+    assert.is_truthy(box:find("⚡ Jev: annotate fromRegistry (app.ts:12), where R widened", 1, true))
+    assert.is_truthy(box:find("↳ widened fromRegistry 0.81", 1, true))
+    assert.is_falsy(box:find("annotate the effect to find where", 1, true))
+    box = render.artistic(diag(LS_WIDE_E, "effect"), { effect = true })
+    assert.is_truthy(box:find("E Not Inferred", 1, true))
+    assert.is_truthy(box:find("where E widened", 1, true))
+    hints.set_resolver(function()
+      return { lean = "jev unsure: widened none 0.30" }
+    end)
+    box = render.artistic(diag(WIDE_E), { effect = true })
+    assert.is_truthy(box:find("⚡ Hint: annotate the effect to find where E widened", 1, true))
+    assert.is_truthy(box:find("↳ jev unsure: widened none 0.30", 1, true))
   end)
 
   it("keeps the generic line and adds a lean when the resolver is unsure", function()

@@ -327,7 +327,15 @@ pick back here to render through this plugin's own templates:
 ```
 │  ◈ Forgot to provide: Greeter | Database
 │  ⚡ Jev: .pipe(Effect.provide(AppLive))
-│     ↳ layer AppLive 0.99 · where here 0.60
+│     ↳ this expression is the program boundary · 0.99
+```
+
+A `Layer` missing its own `RIn` gets `Layer.provide(X) inside this layer`.
+A channel that is only `unknown` has no service to name, so the "annotate
+the effect to find where R widened" line becomes the place itself:
+
+```
+│  ⚡ Jev: annotate steps (src/jobs.ts:145), where R widened
 ```
 
 It also replaces the TS2769 overload heuristic when Jev is confident about
@@ -369,14 +377,18 @@ require("effect-error-pretty.parse").parse(message, { effect = true })
 -- Seams for an external judge (this is what jury.nvim registers into).
 -- The resolver runs inside vim.diagnostic's formatter: synchronous, fast.
 pretty.set_hint_resolver(function(parsed, family, names, diagnostic)
-  -- family is "services" or "errors"; return nil for the generic hint, or
-  -- { label = "Jev", line = "...", detail = "..." } to replace it, or
-  -- { lean = "..." } to keep it and add a line underneath.
+  -- family is "services", "errors" or "widened"; return nil for the generic
+  -- hint, or { label = "Jev", line = "...", detail = "..." } to replace it,
+  -- or { lean = "..." } to keep it and add a line underneath.
+  -- "services" with parsed.tag == "layer" is a Layer's missing RIn.
+  -- "widened": names[1] is the channel label (R, RIn or E) that is only
+  -- unknown/any; the job is to say which definition lost its type.
 end)
 pretty.set_overload_picker(function(msg, candidates) return index_or_nil end)
-pretty.hint_family(parsed)                 -- "services"|"errors"|nil, names
+pretty.hint_family(parsed)                 -- "services"|"errors"|"widened"|nil, names
 pretty.templates.provide(layer, names, where)
 pretty.templates.unhandled(fix, names, target)
+pretty.templates.widened(label, name, file, line)
 ```
 
 ## Extending

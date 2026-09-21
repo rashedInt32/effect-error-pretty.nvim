@@ -10,25 +10,73 @@ local M = {}
 
 -- ── families ──────────────────────────────────────────────────────────────
 
+local function is_uninferred(name)
+  return name == "unknown" or name == "any"
+end
+
+--- True when a channel holds nothing but `unknown`/`any`: inference gave up
+--- upstream and there is no service or error to name.
+---@param names string[]|nil
+---@return boolean
+function M.all_uninferred(names)
+  if type(names) ~= "table" or #names == 0 then
+    return false
+  end
+  for _, n in ipairs(names) do
+    if not is_uninferred(n) then
+      return false
+    end
+  end
+  return true
+end
+
 --- Which hint family a parsed result belongs to, and the names involved.
 --- Only families with a concrete fix shape are returned. Scope-only results
---- are excluded on purpose: `Effect.scoped` needs no judgment.
+--- are excluded on purpose: `Effect.scoped` needs no judgment. A Layer's
+--- missing RIn is "services" too; `parsed.tag == "layer"` tells the
+--- resolver that the fix is Layer.provide inside the layer, not a pipe.
+--- A channel that is only `unknown`/`any` is "widened": `names` is then the
+--- channel label (R, RIn or E) and the resolver's job is to say where
+--- upstream the type was lost.
 ---@param parsed table  result of parse.parse
----@return "services"|"errors"|nil family, string[]|nil names
+---@return "services"|"errors"|"widened"|nil family, string[]|nil names
 function M.family(parsed)
   if type(parsed) ~= "table" then
     return nil
   end
   if parsed.kind == "effect_mismatch" then
-    if parsed.missing_services and #parsed.missing_services > 0 and not parsed.scope_required then
-      return "services", parsed.missing_services
+    -- Only the single-channel boxes carry a hint line; the tri-channel
+    -- view and the identical-signature box do not, so asking is waste.
+    if parsed.diff_count ~= 1 then
+      return nil
+    end
+    local labels = parsed.labels or { "A", "E", "R" }
+    if parsed.missing_services and #parsed.missing_services > 0 then
+      if M.all_uninferred(parsed.missing_services) then
+        return "widened", { labels[3] }
+      end
+      if not parsed.scope_required then
+        return "services", parsed.missing_services
+      end
+      return nil
     end
     if parsed.unhandled_errors and #parsed.unhandled_errors > 0 then
+      if M.all_uninferred(parsed.unhandled_errors) then
+        return "widened", { labels[2] }
+      end
       return "errors", parsed.unhandled_errors
     end
-  elseif parsed.kind == "missing_context" and parsed.tag == "effect" and not parsed.scope_required then
-    return "services", parsed.services
+  elseif parsed.kind == "missing_context" then
+    if M.all_uninferred(parsed.services) then
+      return "widened", { parsed.tag == "layer" and "RIn" or "R" }
+    end
+    if not parsed.scope_required then
+      return "services", parsed.services
+    end
   elseif parsed.kind == "missing_errors" then
+    if M.all_uninferred(parsed.errors) then
+      return "widened", { "E" }
+    end
     return "errors", parsed.errors
   end
   return nil
@@ -76,6 +124,17 @@ function M.templates.unhandled(fix, names, target)
     return (".pipe(Effect.mapError((e) => new %s({ cause: e })))"):format(target or "DomainError")
   end
   return nil
+end
+
+--- Concrete hint for a widened channel: name the definition to annotate.
+---@param label string        R, RIn or E
+---@param name string         the identifier that most likely lost its type
+---@param file string|nil
+---@param line integer|nil
+---@return string
+function M.templates.widened(label, name, file, line)
+  local where = file and (line and (" (%s:%d)"):format(file, line) or (" (%s)"):format(file)) or ""
+  return ("annotate %s%s, where %s widened"):format(name, where, label)
 end
 
 -- ── the seam ──────────────────────────────────────────────────────────────
